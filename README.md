@@ -71,6 +71,11 @@ therefore its easy for Rabbit client to subscribe to selective combinations eg:
   - `KK_TO_RMQ_TRUST_STORE` - default: *empty*
   - `KK_TO_RMQ_TRUST_STORE_PASS` - default: *empty*
 
+###### Connection
+The connection to RabbitMQ is opened in the background when Keycloak starts and kept open, so requests never wait on it.
+If RabbitMQ is unreachable, Keycloak still starts and the connection is retried; after a connection drops, the RabbitMQ
+client's automatic recovery reconnects it. Events emitted while there is no connection are logged as not sent.
+
 ###### Deprecated OPTION 2: edit Keycloak subsystem of WildFly (Keycloak 16 and older) standalone.xml or standalone-ha.xml:
 
 ```xml

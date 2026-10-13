@@ -1,10 +1,6 @@
 package com.github.aznamier.keycloak.event.provider;
 
-import com.rabbitmq.client.Channel;
-import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
-import java.io.IOException;
-import java.util.concurrent.TimeoutException;
 //
 import java.io.*;
 import java.security.*;
@@ -22,27 +18,11 @@ public class RabbitMqEventListenerProviderFactory implements EventListenerProvid
     private static final Logger log = Logger.getLogger(RabbitMqEventListenerProviderFactory.class);
     private RabbitMqConfig cfg;
     private ConnectionFactory connectionFactory;
-    private Connection connection;
-    private Channel channel;
+    private RabbitMqConnectionManager connectionManager;
 
     @Override
     public EventListenerProvider create(KeycloakSession session) {
-        checkConnectionAndChannel();
-        return new RabbitMqEventListenerProvider(channel, session, cfg);
-    }
-
-    private synchronized void checkConnectionAndChannel() {
-        try {
-            if (connection == null || !connection.isOpen()) {
-                this.connection = connectionFactory.newConnection();
-            }
-            if (channel == null || !channel.isOpen()) {
-                channel = connection.createChannel();
-            }
-        }
-        catch (IOException | TimeoutException e) {
-            log.error("keycloak-to-rabbitmq ERROR on connection to rabbitmq", e);
-        }
+        return new RabbitMqEventListenerProvider(connectionManager, session, cfg);
     }
 
     @Override
@@ -107,17 +87,14 @@ public class RabbitMqEventListenerProviderFactory implements EventListenerProvid
 
     @Override
     public void postInit(KeycloakSessionFactory factory) {
-
+        this.connectionManager = new RabbitMqConnectionManager(connectionFactory, cfg);
+        this.connectionManager.start();
     }
 
     @Override
     public void close() {
-        try {
-            channel.close();
-            connection.close();
-        }
-        catch (IOException | TimeoutException e) {
-            log.error("keycloak-to-rabbitmq ERROR on close", e);
+        if (connectionManager != null) {
+            connectionManager.close();
         }
     }
 
