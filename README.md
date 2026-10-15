@@ -7,6 +7,7 @@
 | 1.x | 10.x |
 | 2.x | 13.x |
 | 3.x | 16.x |
+| 4.x | 26.x |
 
 For example here is the notification of the user updated by administrator
 
@@ -48,17 +49,15 @@ therefore its easy for Rabbit client to subscribe to selective combinations eg:
 
 
 ## USAGE:
-1. [Download the latest jar](https://github.com/aznamier/keycloak-event-listener-rabbitmq/blob/target/keycloak-to-rabbit-3.0.5.jar?raw=true) or build from source: ``mvn clean install``
-2. Copy jar into your Keycloak 
-    1. Keycloak version 17+ (Quarkus) `/opt/keycloak/providers/keycloak-to-rabbit-3.0.5.jar` 
-    2. Keycloak version 16 and older `/opt/jboss/keycloak/standalone/deployments/keycloak-to-rabbit-3.0.5.jar`
-3. Configure as described below (option 1 or 2 or 3)
+1. [Download the latest jar](https://github.com/aznamier/keycloak-event-listener-rabbitmq/blob/target/keycloak-to-rabbit-4.0.0.jar?raw=true) or build from source (Java 17+): ``mvn clean install``
+2. Copy jar into your Keycloak: `/opt/keycloak/providers/keycloak-to-rabbit-4.0.0.jar`
+3. Configure as described below
 4. Restart the Keycloak server
 5. Enable logging in Keycloak UI by adding **keycloak-to-rabbitmq**  
  `Manage > Events > Config > Events Config > Event Listeners`
 
 #### Configuration 
-###### Recommended: OPTION 1: just configure **ENVIRONMENT VARIABLES**
+###### Environment variables
   - `KK_TO_RMQ_URL` - default: *localhost*
   - `KK_TO_RMQ_PORT` - default: *5672*
   - `KK_TO_RMQ_VHOST` - default: *empty*
@@ -75,31 +74,3 @@ therefore its easy for Rabbit client to subscribe to selective combinations eg:
 The connection to RabbitMQ is opened in the background when Keycloak starts and kept open, so requests never wait on it.
 If RabbitMQ is unreachable, Keycloak still starts and the connection is retried; after a connection drops, the RabbitMQ
 client's automatic recovery reconnects it. Events emitted while there is no connection are logged as not sent.
-
-###### Deprecated OPTION 2: edit Keycloak subsystem of WildFly (Keycloak 16 and older) standalone.xml or standalone-ha.xml:
-
-```xml
-<spi name="eventsListener">
-    <provider name="keycloak-to-rabbitmq" enabled="true">
-        <properties>
-            <property name="url" value="${env.KK_TO_RMQ_URL:localhost}"/>
-            <property name="port" value="${env.KK_TO_RMQ_PORT:5672}"/>
-            <property name="vhost" value="${env.KK_TO_RMQ_VHOST:}"/>
-            <property name="exchange" value="${env.KK_TO_RMQ_EXCHANGE:amq.topic}"/>
-            <property name="use_tls" value="${env.KK_TO_RMQ_USE_TLS:false}"/>
-            <property name="key_store" value="${env.KK_TO_RMQ_KEY_STORE:}"/>
-            <property name="key_store_pass" value="${env.KK_TO_RMQ_KEY_STORE_PASS:}"/> 
-            <property name="trust_store" value="${env.KK_TO_RMQ_TRUST_STORE:}"/>
-            <property name="trust_store_pass" value="${env.KK_TO_RMQ_TRUST_STORE_PASS:}"/>           
-            <property name="username" value="${env.KK_TO_RMQ_USERNAME:guest}"/>
-            <property name="password" value="${env.KK_TO_RMQ_PASSWORD:guest}"/>
-        </properties>
-    </provider>
-</spi>
-```
-###### Deprecated OPTION 3 same effect as OPTION 2 but programatically WildFly (Keycloak 16 and older):
-```
-echo "yes" | $KEYCLOAK_HOME/bin/jboss-cli.sh --file=$KEYCLOAK_HOME/KEYCLOAK_TO_RABBIT.cli
-```
-
-
