@@ -38,6 +38,12 @@ public class RabbitMqConfig {
 
 
 	private String exchange;
+
+	// Connection settings
+	private Integer heartbeatSeconds;
+	// Null keeps the client's defaults
+	private Integer connectionTimeoutMs;
+	private Long networkRecoveryIntervalMs;
 	
 	public static String calculateRoutingKey(AdminEvent adminEvent, KeycloakSession session) {
 		//KK.EVENT.ADMIN.<REALM>.<RESULT>.<RESOURCE_TYPE>.<OPERATION>
@@ -110,6 +116,13 @@ public class RabbitMqConfig {
 		//
 
 		cfg.exchange = resolveConfigVar(config, "exchange", "amq.topic");
+
+		// Connection settings: defaults match the RabbitMQ client's own defaults
+		cfg.heartbeatSeconds = (int) number(config, "heartbeat_seconds", "60", 0, Integer.MAX_VALUE);
+		String connectionTimeoutMs = resolveConfigVar(config, "connection_timeout_ms", "");
+		cfg.connectionTimeoutMs = connectionTimeoutMs.trim().isEmpty() ? null
+				: (int) parseNumber("connection_timeout_ms", connectionTimeoutMs, 0, Integer.MAX_VALUE);
+		cfg.networkRecoveryIntervalMs = number(config, "network_recovery_interval_ms", "5000", 1, Long.MAX_VALUE);
 		return cfg;
 		
 	}
@@ -250,6 +263,25 @@ public class RabbitMqConfig {
 	}
 	public void setExchange(String exchange) {
 		this.exchange = exchange;
+	}
+
+	public Integer getHeartbeatSeconds() {
+		return heartbeatSeconds;
+	}
+	public void setHeartbeatSeconds(Integer heartbeatSeconds) {
+		this.heartbeatSeconds = heartbeatSeconds;
+	}
+	public Integer getConnectionTimeoutMs() {
+		return connectionTimeoutMs;
+	}
+	public void setConnectionTimeoutMs(Integer connectionTimeoutMs) {
+		this.connectionTimeoutMs = connectionTimeoutMs;
+	}
+	public Long getNetworkRecoveryIntervalMs() {
+		return networkRecoveryIntervalMs;
+	}
+	public void setNetworkRecoveryIntervalMs(Long networkRecoveryIntervalMs) {
+		this.networkRecoveryIntervalMs = networkRecoveryIntervalMs;
 	}
 
 }

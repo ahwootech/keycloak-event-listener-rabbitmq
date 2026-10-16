@@ -98,6 +98,10 @@ class RabbitMqResilienceIT {
 		settings.put("username", rabbitmq.getAdminUsername());
 		settings.put("password", rabbitmq.getAdminPassword());
 		settings.put("vhost", "/");
+		// Retry and notice a dead host quickly, so recovery doesn't slow the tests down
+		settings.put("network_recovery_interval_ms", "200");
+		settings.put("connection_timeout_ms", "1000");
+		settings.put("heartbeat_seconds", "2");
 	}
 
 	@AfterEach
@@ -118,7 +122,7 @@ class RabbitMqResilienceIT {
 		sendEvent("lost-while-down");
 		assertTrue(System.currentTimeMillis() - start < 500, "the request waited on RabbitMQ");
 
-		// The connection attempt hangs on the dead host in the background, never on a request
+		// Attempts time out on the dead host (1s each) in the background, never on a request
 		RabbitMqConnectionManager manager = manager();
 		Thread.sleep(3000);
 		assertNull(manager.getChannel());
@@ -130,6 +134,28 @@ class RabbitMqResilienceIT {
 		GetResponse received = awaitMessage();
 		assertTrue(new String(received.getBody(), StandardCharsets.UTF_8).contains("after-recovery"));
 		assertNull(testChannel.basicGet(QUEUE, true), "the event sent while down should have been dropped");
+	}
+
+	@Test
+	void aHostThatDiesWithTheConnectionOpenIsNoticedWithinAFewHeartbeats() throws Exception {
+		startPlugin();
+		RabbitMqConnectionManager manager = manager();
+		await(() -> manager.getChannel() != null);
+
+		// Nothing is closed, so only missed heartbeats (2s here) reveal it
+		blackHole();
+		long start = System.currentTimeMillis();
+		await(() -> manager.getChannel() == null);
+		long noticedMs = System.currentTimeMillis() - start;
+		assertTrue(noticedMs < 10_000, "took " + noticedMs + " ms to notice the dead host");
+
+		// From then on, requests don't wait
+		long requestStart = System.currentTimeMillis();
+		sendEvent("after-noticed");
+		assertTrue(System.currentTimeMillis() - requestStart < 500, "the request waited on RabbitMQ");
+
+		restore();
+		await(() -> manager.getChannel() != null);
 	}
 
 	private void startPlugin() {

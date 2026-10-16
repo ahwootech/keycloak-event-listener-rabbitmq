@@ -38,6 +38,15 @@ public class RabbitMqEventListenerProviderFactory implements EventListenerProvid
         this.connectionFactory.setHost(cfg.getHostUrl());
         this.connectionFactory.setPort(cfg.getPort());
         this.connectionFactory.setAutomaticRecoveryEnabled(true);
+        this.connectionFactory.setRequestedHeartbeat(cfg.getHeartbeatSeconds());
+        // One timeout for each step of a connection attempt: the TCP connection, then the AMQP handshake.
+        // Unset keeps the client's defaults (60s and 10s).
+        if (cfg.getConnectionTimeoutMs() != null) {
+            this.connectionFactory.setConnectionTimeout(cfg.getConnectionTimeoutMs());
+            this.connectionFactory.setHandshakeTimeout(cfg.getConnectionTimeoutMs());
+        }
+        // Also used as the retry interval for the first connection at startup
+        this.connectionFactory.setNetworkRecoveryInterval(cfg.getNetworkRecoveryIntervalMs());
 
         if (cfg.getUseTls()) {
             useTls();

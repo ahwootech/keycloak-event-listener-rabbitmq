@@ -71,6 +71,9 @@ An invalid value, such as a number with extra characters (`5672x`), a number out
   - `KK_TO_RMQ_TRUST_STORE` - default: *empty*
   - `KK_TO_RMQ_TRUST_STORE_PASS` - default: *empty*
   - `KK_TO_RMQ_TLS_VERIFY` - default: *true*
+  - `KK_TO_RMQ_HEARTBEAT_SECONDS` - default: *60*
+  - `KK_TO_RMQ_CONNECTION_TIMEOUT_MS` - default: *empty* (the client's 60000 for the TCP connection and 10000 for the handshake)
+  - `KK_TO_RMQ_NETWORK_RECOVERY_INTERVAL_MS` - default: *5000*
 
 ###### TLS
 With `KK_TO_RMQ_USE_TLS=true` the connection uses TLS 1.3 or 1.2, whichever both sides support, and checks RabbitMQ's certificate:
@@ -81,6 +84,12 @@ With `KK_TO_RMQ_USE_TLS=true` the connection uses TLS 1.3 or 1.2, whichever both
   - `KK_TO_RMQ_TLS_VERIFY=false` skips the certificate and host name checks: the connection is still encrypted, but anyone who can intercept it could impersonate RabbitMQ, and a warning is logged at startup. It's meant for a self-signed certificate on a private network; adding that certificate to a truststore is the safer option
 
 ###### Connection
-The connection to RabbitMQ is opened in the background when Keycloak starts and kept open, so requests never wait on it.
-If RabbitMQ is unreachable, Keycloak still starts and the connection is retried; after a connection drops, the RabbitMQ
-client's automatic recovery reconnects it. Events emitted while there is no connection are logged as not sent.
+The connection to RabbitMQ is opened in the background when Keycloak starts and kept open, so connecting never holds up a
+request. If RabbitMQ is unreachable, Keycloak still starts and the connection is retried; after a connection drops, the
+RabbitMQ client's automatic recovery reconnects it. Events emitted while there is no connection are logged as not sent.
+Events are still sent on the request thread, so while RabbitMQ is connected but not responding (e.g. frozen, or blocking
+publishers when it is low on memory or disk), or until a host that died with the connection open is noticed, requests
+wait on it. The defaults below are the RabbitMQ Java client's own:
+  - `KK_TO_RMQ_HEARTBEAT_SECONDS` - how often the client and RabbitMQ check the other is still there. A connection to a broker that disappears without closing it (e.g. a host failure) is only detected after about two missed heartbeats, so lower values detect it sooner, e.g. *10*. RabbitMQ uses the lower of the client's and the server's values
+  - `KK_TO_RMQ_CONNECTION_TIMEOUT_MS` - how long a connection attempt waits for the TCP connection, and again for RabbitMQ to respond once it is open (e.g. when the broker is frozen or behind a proxy). Against an unreachable or frozen broker every attempt waits this long, so lower values reconnect sooner once RabbitMQ is back, e.g. *5000*. When not set, the client's defaults are used: 60000 for the TCP connection and 10000 for the response
+  - `KK_TO_RMQ_NETWORK_RECOVERY_INTERVAL_MS` - how long to wait between reconnect attempts, both for the first connection at startup and after a connection drops
