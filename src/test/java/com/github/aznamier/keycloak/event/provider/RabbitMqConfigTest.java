@@ -40,6 +40,9 @@ class RabbitMqConfigTest {
 		assertEquals(60, cfg.getHeartbeatSeconds());
 		assertNull(cfg.getConnectionTimeoutMs(), "the client's defaults");
 		assertEquals(5000L, cfg.getNetworkRecoveryIntervalMs());
+		assertEquals(RabbitMqConfig.PublishMode.SYNC, cfg.getPublishMode(), "events are sent on the request thread unless turned on");
+		assertEquals(100, cfg.getPublishBufferMaxMb());
+		assertEquals(5000L, cfg.getShutdownFlushTimeoutMs());
 	}
 
 	@Test
@@ -109,6 +112,7 @@ class RabbitMqConfigTest {
 		assertEquals("keycloak-to-rabbitmq setting port (KK_TO_RMQ_PORT) must be a whole number from 1 to 65535, got '70000'",
 				assertThrows(IllegalArgumentException.class, () -> fromSettings("port", "70000")).getMessage());
 		assertThrows(IllegalArgumentException.class, () -> fromSettings("port", "0"));
+		assertThrows(IllegalArgumentException.class, () -> fromSettings("publish_buffer_max_mb", "0"));
 	}
 
 	@Test
@@ -158,6 +162,13 @@ class RabbitMqConfigTest {
 		assertThrows(IllegalArgumentException.class, () -> fromSettings("hosts", "rabbit:70000"));
 		assertThrows(IllegalArgumentException.class, () -> fromSettings("hosts", " , "));
 		assertThrows(IllegalArgumentException.class, () -> fromSettings("hosts", "fe80::1"), "IPv6 needs brackets");
+	}
+
+	@Test
+	void publishModeIsOneOfTheKnownModes() {
+		assertEquals(RabbitMqConfig.PublishMode.ASYNC, fromSettings("publish_mode", " Async ").getPublishMode());
+		assertEquals("keycloak-to-rabbitmq setting publish_mode (KK_TO_RMQ_PUBLISH_MODE) must be one of sync, async, got 'background'",
+				assertThrows(IllegalArgumentException.class, () -> fromSettings("publish_mode", "background")).getMessage());
 	}
 
 	@Test
