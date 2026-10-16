@@ -70,6 +70,13 @@ therefore its easy for Rabbit client to subscribe to selective combinations eg:
   - `KK_TO_RMQ_TRUST_STORE` - default: *empty*
   - `KK_TO_RMQ_TRUST_STORE_PASS` - default: *empty*
 
+###### TLS
+With `KK_TO_RMQ_USE_TLS=true` the connection uses TLS 1.3 or 1.2, whichever both sides support, and checks RabbitMQ's certificate:
+  - against `KK_TO_RMQ_TRUST_STORE` (a JKS file, with `KK_TO_RMQ_TRUST_STORE_PASS`) if set, otherwise against the JVM's trusted certificates
+  - the certificate must match the host in `KK_TO_RMQ_URL`
+  - `KK_TO_RMQ_KEY_STORE` (a PKCS12 file, with `KK_TO_RMQ_KEY_STORE_PASS`) adds a client certificate, for RabbitMQ setups that require one
+  - if TLS can't be set up (e.g. a missing or unreadable truststore), Keycloak doesn't start, rather than connecting without TLS
+
 ###### Connection
 The connection to RabbitMQ is opened in the background when Keycloak starts and kept open, so requests never wait on it.
 If RabbitMQ is unreachable, Keycloak still starts and the connection is retried; after a connection drops, the RabbitMQ

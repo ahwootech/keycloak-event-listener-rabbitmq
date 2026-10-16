@@ -6,7 +6,6 @@ import java.io.*;
 import java.security.*;
 import javax.net.ssl.*;
 //
-import org.jboss.logging.Logger;
 import org.keycloak.Config.Scope;
 import org.keycloak.events.EventListenerProvider;
 import org.keycloak.events.EventListenerProviderFactory;
@@ -15,7 +14,6 @@ import org.keycloak.models.KeycloakSessionFactory;
 
 public class RabbitMqEventListenerProviderFactory implements EventListenerProviderFactory {
 
-    private static final Logger log = Logger.getLogger(RabbitMqEventListenerProviderFactory.class);
     private RabbitMqConfig cfg;
     private ConnectionFactory connectionFactory;
     private RabbitMqConnectionManager connectionManager;
@@ -38,50 +36,46 @@ public class RabbitMqEventListenerProviderFactory implements EventListenerProvid
         this.connectionFactory.setAutomaticRecoveryEnabled(true);
 
         if (cfg.getUseTls()) {
-            try {
-                Boolean context = false;
-                SSLContext c = SSLContext.getInstance("TLSv1.2");
+            useTls();
+        }
+    }
 
-                TrustManagerFactory tmf = TrustManagerFactory.getInstance("SunX509");
-                if (! cfg.getTrustStore().isEmpty()){        
-                    char[] trustPassphrase = cfg.getTrustStorePass().toCharArray();
-                    KeyStore tks = KeyStore.getInstance("JKS");
-                    tks.load(new FileInputStream(cfg.getTrustStore()), trustPassphrase);
-            
-                    tmf.init(tks);
-
-                    c.init(null, tmf.getTrustManagers(), null);
-                    context = true;
-                }               
-                
-                KeyManagerFactory kmf = KeyManagerFactory.getInstance("SunX509");
-                if (! cfg.getKeyStore().isEmpty()){
-                    char[] keyPassphrase = cfg.getKeytStorePass().toCharArray();
-                    KeyStore ks = KeyStore.getInstance("PKCS12");
-                    ks.load(new FileInputStream(cfg.getKeyStore()), keyPassphrase);
-                    
-                    kmf.init(ks, keyPassphrase);
-                    
-                    if (context){
-                        c.init(kmf.getKeyManagers(), tmf.getTrustManagers(), null);
-                    }
-                    else{
-                        c.init(kmf.getKeyManagers(), null, null);
-                        context = true;
-                    }
+    /**
+     * TLS with the highest version both sides support, verifying RabbitMQ's certificate (against the truststore if
+     * one is configured, otherwise the JVM's trusted certificates) and that it matches the host. A client certificate
+     * is presented if a keystore is configured. Fails Keycloak's startup rather than connecting without TLS.
+     */
+    private void useTls() {
+        try {
+            TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+            if (cfg.getTrustStore().isEmpty()) {
+                tmf.init((KeyStore) null);
+            } else {
+                KeyStore trustStore = KeyStore.getInstance("JKS");
+                try (InputStream in = new FileInputStream(cfg.getTrustStore())) {
+                    trustStore.load(in, cfg.getTrustStorePass().toCharArray());
                 }
-
-                if ( context ){
-                    this.connectionFactory.useSslProtocol(c);
-                }
-                else {
-                    this.connectionFactory.useSslProtocol();
-                }
-                
+                tmf.init(trustStore);
             }
-            catch (Exception e) {
-                log.error("Could not use SSL protocol", e);
+
+            KeyManager[] keyManagers = null;
+            if (!cfg.getKeyStore().isEmpty()) {
+                char[] keyPassphrase = cfg.getKeytStorePass().toCharArray();
+                KeyStore keyStore = KeyStore.getInstance("PKCS12");
+                try (InputStream in = new FileInputStream(cfg.getKeyStore())) {
+                    keyStore.load(in, keyPassphrase);
+                }
+                KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+                kmf.init(keyStore, keyPassphrase);
+                keyManagers = kmf.getKeyManagers();
             }
+
+            SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(keyManagers, tmf.getTrustManagers(), null);
+            this.connectionFactory.useSslProtocol(sslContext);
+            this.connectionFactory.enableHostnameVerification();
+        } catch (Exception e) {
+            throw new IllegalStateException("keycloak-to-rabbitmq could not set up TLS for RabbitMQ: " + e.getMessage(), e);
         }
     }
 
