@@ -100,6 +100,15 @@ class RabbitMqTlsIT {
 		assertTrue(causes.contains("PKIX path building failed") || causes.contains("SSLHandshakeException"), causes);
 	}
 
+	@Test
+	void withVerificationOffItConnectsDespiteAnUntrustedCertificate() throws Exception {
+		// Encryption only, e.g. a self-signed certificate on a private network
+		settings.put("tls_verify", "false");
+		RabbitMqConnectionManager manager = startPlugin();
+
+		await(() -> manager.getChannel() != null);
+	}
+
 	private RabbitMqConnectionManager startPlugin() throws Exception {
 		Scope scope = mock(Scope.class);
 		when(scope.get(anyString())).thenAnswer(i -> settings.get(i.<String>getArgument(0)));

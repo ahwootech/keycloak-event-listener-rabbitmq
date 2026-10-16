@@ -26,6 +26,8 @@ public class RabbitMqConfig {
 	private String password;
 	private String vhost;
 	private Boolean useTls;
+	// false: encrypted, but RabbitMQ's certificate and host name are not checked
+	private Boolean tlsVerify;
 
 	// SSL context settings
 	private String trustStore;
@@ -98,6 +100,7 @@ public class RabbitMqConfig {
 		cfg.password = resolveConfigVar(config, "password", "admin");
 		cfg.vhost = resolveConfigVar(config, "vhost", "");
 		cfg.useTls = flag(config, "use_tls", "false");
+		cfg.tlsVerify = flag(config, "tls_verify", "true");
 
 		// SSL context settings
 		cfg.trustStore = resolveConfigVar(config, "trust_store", "");
@@ -207,6 +210,12 @@ public class RabbitMqConfig {
 	}
 	public void setUseTls(Boolean useTls) {
 		this.useTls = useTls;
+	}
+	public Boolean getTlsVerify() {
+		return tlsVerify;
+	}
+	public void setTlsVerify(Boolean tlsVerify) {
+		this.tlsVerify = tlsVerify;
 	}
 
 	// setters and getters SSL context setting

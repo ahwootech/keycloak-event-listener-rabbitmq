@@ -22,6 +22,7 @@ class RabbitMqConfigTest {
 
 		assertEquals(5672, cfg.getPort());
 		assertFalse(cfg.getUseTls());
+		assertTrue(cfg.getTlsVerify(), "TLS is verified unless turned off");
 	}
 
 	@Test

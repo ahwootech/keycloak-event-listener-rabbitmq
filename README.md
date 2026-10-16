@@ -70,6 +70,7 @@ An invalid value, such as a number with extra characters (`5672x`), a number out
   - `KK_TO_RMQ_KEY_STORE_PASS` - default: *empty*
   - `KK_TO_RMQ_TRUST_STORE` - default: *empty*
   - `KK_TO_RMQ_TRUST_STORE_PASS` - default: *empty*
+  - `KK_TO_RMQ_TLS_VERIFY` - default: *true*
 
 ###### TLS
 With `KK_TO_RMQ_USE_TLS=true` the connection uses TLS 1.3 or 1.2, whichever both sides support, and checks RabbitMQ's certificate:
@@ -77,6 +78,7 @@ With `KK_TO_RMQ_USE_TLS=true` the connection uses TLS 1.3 or 1.2, whichever both
   - the certificate must match the host in `KK_TO_RMQ_URL`
   - `KK_TO_RMQ_KEY_STORE` (a PKCS12 file, with `KK_TO_RMQ_KEY_STORE_PASS`) adds a client certificate, for RabbitMQ setups that require one
   - if TLS can't be set up (e.g. a missing or unreadable truststore), Keycloak doesn't start, rather than connecting without TLS
+  - `KK_TO_RMQ_TLS_VERIFY=false` skips the certificate and host name checks: the connection is still encrypted, but anyone who can intercept it could impersonate RabbitMQ, and a warning is logged at startup. It's meant for a self-signed certificate on a private network; adding that certificate to a truststore is the safer option
 
 ###### Connection
 The connection to RabbitMQ is opened in the background when Keycloak starts and kept open, so requests never wait on it.
