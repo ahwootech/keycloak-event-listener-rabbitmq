@@ -93,11 +93,11 @@ public class RabbitMqConfig {
 		RabbitMqConfig cfg = new RabbitMqConfig();
 		
 		cfg.hostUrl = resolveConfigVar(config, "url", "localhost");
-		cfg.port = Integer.valueOf(resolveConfigVar(config, "port", "5672"));
+		cfg.port = (int) number(config, "port", "5672", 1, 65535);
 		cfg.username = resolveConfigVar(config, "username", "admin");
 		cfg.password = resolveConfigVar(config, "password", "admin");
 		cfg.vhost = resolveConfigVar(config, "vhost", "");
-		cfg.useTls = Boolean.valueOf(resolveConfigVar(config, "use_tls", "false"));
+		cfg.useTls = flag(config, "use_tls", "false");
 
 		// SSL context settings
 		cfg.trustStore = resolveConfigVar(config, "trust_store", "");
@@ -111,6 +111,46 @@ public class RabbitMqConfig {
 		
 	}
 	
+	/**
+	 * A whole number setting, which must be within min and max; otherwise startup fails, naming the setting.
+	 */
+	private static long number(Scope config, String name, String defaultValue, long min, long max) {
+		return parseNumber(name, resolveConfigVar(config, name, defaultValue), min, max);
+	}
+
+	private static long parseNumber(String name, String value, long min, long max) {
+		long n;
+		try {
+			n = Long.parseLong(value.trim());
+		} catch (NumberFormatException e) {
+			n = Long.MIN_VALUE;
+		}
+		if (n < min || n > max) {
+			throw invalid(name, value, max == Long.MAX_VALUE || max == Integer.MAX_VALUE
+					? "a whole number of at least " + min : "a whole number from " + min + " to " + max);
+		}
+		return n;
+	}
+
+	/**
+	 * A true/false setting. Anything else fails startup, rather than silently meaning false.
+	 */
+	private static boolean flag(Scope config, String name, String defaultValue) {
+		String value = resolveConfigVar(config, name, defaultValue);
+		if ("true".equalsIgnoreCase(value.trim())) {
+			return true;
+		}
+		if ("false".equalsIgnoreCase(value.trim())) {
+			return false;
+		}
+		throw invalid(name, value, "true or false");
+	}
+
+	private static IllegalArgumentException invalid(String name, String value, String expected) {
+		return new IllegalArgumentException(String.format("keycloak-to-rabbitmq setting %s (KK_TO_RMQ_%s) must be %s, got '%s'",
+				name, name.toUpperCase(Locale.ENGLISH), expected, value));
+	}
+
 	private static String resolveConfigVar(Scope config, String variableName, String defaultValue) {
 		
 		String value = defaultValue;

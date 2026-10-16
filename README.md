@@ -58,6 +58,7 @@ therefore its easy for Rabbit client to subscribe to selective combinations eg:
 
 #### Configuration 
 ###### Environment variables
+An invalid value, such as a number with extra characters (`5672x`), a number out of range, or a true/false setting set to anything other than `true` or `false`, stops Keycloak from starting with an error naming the setting.
   - `KK_TO_RMQ_URL` - default: *localhost*
   - `KK_TO_RMQ_PORT` - default: *5672*
   - `KK_TO_RMQ_VHOST` - default: *empty*
