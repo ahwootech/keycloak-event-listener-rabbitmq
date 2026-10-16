@@ -21,10 +21,11 @@ public class RabbitMqEventListenerProviderFactory implements EventListenerProvid
     private RabbitMqConfig cfg;
     private ConnectionFactory connectionFactory;
     private RabbitMqConnectionManager connectionManager;
+    private RabbitMqPublisher publisher;
 
     @Override
     public EventListenerProvider create(KeycloakSession session) {
-        return new RabbitMqEventListenerProvider(connectionManager, session, cfg);
+        return new RabbitMqEventListenerProvider(publisher, session);
     }
 
     @Override
@@ -106,10 +107,15 @@ public class RabbitMqEventListenerProviderFactory implements EventListenerProvid
     public void postInit(KeycloakSessionFactory factory) {
         this.connectionManager = new RabbitMqConnectionManager(connectionFactory, cfg);
         this.connectionManager.start();
+        this.publisher = new RabbitMqPublisher(connectionManager, cfg);
     }
 
     @Override
     public void close() {
+        // Before the connection closes, so buffered events can still be sent
+        if (publisher != null) {
+            publisher.close();
+        }
         if (connectionManager != null) {
             connectionManager.close();
         }

@@ -1,5 +1,6 @@
 package com.github.aznamier.keycloak.event.provider;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -11,13 +12,28 @@ import static org.mockito.Mockito.when;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.Timeout.ThreadMode;
 import org.junit.jupiter.api.condition.EnabledIf;
 import org.keycloak.Config.Scope;
 import org.keycloak.events.Event;
@@ -49,6 +65,8 @@ import eu.rekawek.toxiproxy.model.ToxicDirection;
  */
 @Testcontainers
 @EnabledIf(DockerRequirement.CONDITION)
+// On a separate thread, so a request blocked on RabbitMQ fails the test instead of hanging the build
+@Timeout(value = 3, unit = TimeUnit.MINUTES, threadMode = ThreadMode.SEPARATE_THREAD)
 class RabbitMqResilienceIT {
 
 	private static final Network network = Network.newNetwork();
@@ -68,6 +86,7 @@ class RabbitMqResilienceIT {
 
 	private static final int PROXY_PORT = 8666;
 	private static final String QUEUE = "kk-test";
+	private static final Pattern USER_ID = Pattern.compile("\"userId\"\\s*:\\s*\"([^\"]+)\"");
 
 	private Proxy proxy;
 	private Connection testConnection;
@@ -193,6 +212,98 @@ class RabbitMqResilienceIT {
 		}
 	}
 
+	@Test
+	void backgroundPublishingKeepsEventsInOrderThroughAnOutage() throws Exception {
+		settings.put("publish_mode", "async");
+		startPlugin();
+		RabbitMqConnectionManager manager = manager();
+		await(() -> manager.getChannel() != null);
+		warmUp();
+
+		// Events sent into the dead connection before the plugin notices are lost.
+		// Events sent once it knows it is disconnected must be kept and delivered after recovery.
+		List<Integer> mustArrive = new ArrayList<>();
+		long slowestMs = 0;
+		int seq = 0;
+		int keptWhileDown = 0;
+
+		for (int i = 0; i < 50; i++, seq++) {
+			slowestMs = Math.max(slowestMs, timedSend(seq));
+		}
+		blackHole();
+		long deadline = System.currentTimeMillis() + 20_000;
+		while (keptWhileDown < 100) {
+			assertTrue(System.currentTimeMillis() < deadline, "the plugin never noticed the outage");
+			boolean disconnected = manager.getChannel() == null;
+			slowestMs = Math.max(slowestMs, timedSend(seq));
+			if (disconnected) {
+				mustArrive.add(seq);
+				keptWhileDown++;
+			}
+			seq++;
+			Thread.sleep(20);
+		}
+		restore();
+		await(() -> manager.getChannel() != null);
+		for (int i = 0; i < 50; i++, seq++) {
+			slowestMs = Math.max(slowestMs, timedSend(seq));
+			mustArrive.add(seq);
+		}
+		assertTrue(slowestMs < 200, "a request waited " + slowestMs + " ms on RabbitMQ");
+
+		List<Integer> received = receiveAll(seq);
+		for (int i = 1; i < received.size(); i++) {
+			assertTrue(received.get(i) > received.get(i - 1), "out of order or duplicated: " + received);
+		}
+		List<Integer> missing = new ArrayList<>(mustArrive);
+		missing.removeAll(received);
+		assertTrue(missing.isEmpty(), "events sent while disconnected or after recovery were lost: " + missing);
+	}
+
+	@Test
+	void backgroundPublishingDoesNotMakeRequestsWaitWhileRabbitMqBlocksPublishers() throws Exception {
+		settings.put("publish_mode", "async");
+		startPlugin();
+		RabbitMqConnectionManager manager = manager();
+		await(() -> manager.getChannel() != null);
+		warmUp();
+		String watermark = memoryWatermark();
+
+		// A memory alarm: RabbitMQ stays connected but stops reading from publishers, so once the network
+		// buffers are full, sending blocks. 2000 events of about 10 KB are far more than those buffers hold.
+		// Sent on another thread, so a request that waits fails the test instead of hanging it
+		int count = 2000;
+		AtomicLong slowestMs = new AtomicLong();
+		ExecutorService requests = Executors.newSingleThreadExecutor();
+		try {
+			rabbitmqctl("set_vm_memory_high_watermark", "absolute", "1MB");
+			await(() -> alarmsRaised().contains("Memory alarm"));
+			Future<?> sent = requests.submit(() -> {
+				for (int seq = 0; seq < count; seq++) {
+					long start = System.currentTimeMillis();
+					sendEvent(String.valueOf(seq), 10_000);
+					slowestMs.accumulateAndGet(System.currentTimeMillis() - start, Math::max);
+				}
+			});
+			try {
+				sent.get(30, TimeUnit.SECONDS);
+			} catch (TimeoutException e) {
+				throw new AssertionError("requests were still waiting on RabbitMQ after 30s");
+			}
+		} finally {
+			rabbitmqctl("set_vm_memory_high_watermark", watermark);
+			requests.shutdownNow();
+		}
+		assertTrue(slowestMs.get() < 200, "a request waited " + slowestMs.get() + " ms on RabbitMQ");
+
+		// Sent once the alarm clears
+		List<Integer> expected = new ArrayList<>();
+		for (int seq = 0; seq < count; seq++) {
+			expected.add(seq);
+		}
+		assertEquals(expected, receiveAll(count));
+	}
+
 	private void startPlugin() {
 		Scope scope = mock(Scope.class);
 		when(scope.get(anyString())).thenAnswer(i -> settings.get(i.<String>getArgument(0)));
@@ -205,6 +316,11 @@ class RabbitMqResilienceIT {
 	 * Emits a LOGIN event in a Keycloak transaction and commits it, the way a request does.
 	 */
 	private void sendEvent(String userId) {
+		sendEvent(userId, 0);
+	}
+
+	/** Like {@link #sendEvent(String)}, with an event detail of paddingChars characters, to make the event bigger. */
+	private void sendEvent(String userId, int paddingChars) {
 		RealmModel realm = mock(RealmModel.class);
 		when(realm.getName()).thenReturn("test");
 		RealmProvider realms = mock(RealmProvider.class);
@@ -225,9 +341,49 @@ class RabbitMqResilienceIT {
 		event.setClientId("my-client");
 		event.setUserId(userId);
 		event.setTime(System.currentTimeMillis());
+		if (paddingChars > 0) {
+			event.setDetails(Collections.singletonMap("padding", String.join("", Collections.nCopies(paddingChars, "x"))));
+		}
 		provider.onEvent(event);
 
 		tm.commit();
+	}
+
+	/**
+	 * Sends one event and waits for it, so the first timed request doesn't include class loading and JSON setup
+	 * (over 100 ms, more on a slow CI runner).
+	 */
+	private void warmUp() throws Exception {
+		sendEvent("warm-up");
+		awaitMessage();
+	}
+
+	private long timedSend(int seq) {
+		long start = System.currentTimeMillis();
+		sendEvent(String.valueOf(seq));
+		return System.currentTimeMillis() - start;
+	}
+
+	/**
+	 * Returns the sequence numbers (user IDs) of the events received, in the order they arrive, until all of
+	 * 0 to count - 1 have arrived, or until none arrive for a while (10s, or 2s once the last one has arrived).
+	 */
+	private List<Integer> receiveAll(int count) throws Exception {
+		List<Integer> received = new ArrayList<>();
+		Set<Integer> seen = new HashSet<>();
+		while (seen.size() < count) {
+			GetResponse response = pollMessage(seen.contains(count - 1) ? 2_000 : 10_000);
+			if (response == null) {
+				break;
+			}
+			Matcher m = USER_ID.matcher(new String(response.getBody(), StandardCharsets.UTF_8));
+			if (m.find()) {
+				int seq = Integer.parseInt(m.group(1));
+				seen.add(seq);
+				received.add(seq);
+			}
+		}
+		return received;
 	}
 
 	private RabbitMqConnectionManager manager() throws Exception {
@@ -248,7 +404,16 @@ class RabbitMqResilienceIT {
 	}
 
 	private GetResponse awaitMessage() throws Exception {
-		long deadline = System.currentTimeMillis() + 10_000;
+		GetResponse response = pollMessage(10_000);
+		if (response == null) {
+			throw new AssertionError("no message arrived");
+		}
+		return response;
+	}
+
+	/** Returns the next message, or null if none arrives within the timeout. */
+	private GetResponse pollMessage(long timeoutMs) throws Exception {
+		long deadline = System.currentTimeMillis() + timeoutMs;
 		while (System.currentTimeMillis() < deadline) {
 			GetResponse response = testChannel.basicGet(QUEUE, true);
 			if (response != null) {
@@ -256,7 +421,7 @@ class RabbitMqResilienceIT {
 			}
 			Thread.sleep(50);
 		}
-		throw new AssertionError("no message arrived");
+		return null;
 	}
 
 	private static Object newInstanceIfPresent(String className) {
@@ -267,6 +432,31 @@ class RabbitMqResilienceIT {
 		} catch (ReflectiveOperationException e) {
 			throw new IllegalStateException(e);
 		}
+	}
+
+	private static void rabbitmqctl(String... args) throws Exception {
+		String[] command = new String[args.length + 2];
+		command[0] = "rabbitmqctl";
+		command[1] = "-q";
+		System.arraycopy(args, 0, command, 2, args.length);
+		org.testcontainers.containers.Container.ExecResult result = rabbitmq.execInContainer(command);
+		assertEquals(0, result.getExitCode(), result.getStderr());
+	}
+
+	private static String alarmsRaised() {
+		try {
+			return rabbitmq.execInContainer("rabbitmq-diagnostics", "-q", "alarms").getStdout();
+		} catch (Exception e) {
+			throw new IllegalStateException(e);
+		}
+	}
+
+	/** RabbitMQ's relative memory high watermark, e.g. "0.6", so a test can put it back. */
+	private static String memoryWatermark() throws Exception {
+		String status = rabbitmq.execInContainer("rabbitmq-diagnostics", "-q", "status").getStdout();
+		Matcher m = Pattern.compile("Memory high watermark setting: ([0-9.]+) of available memory").matcher(status);
+		assertTrue(m.find(), status);
+		return m.group(1);
 	}
 
 	private static void await(BooleanSupplier condition) throws InterruptedException {

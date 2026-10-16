@@ -21,6 +21,11 @@ public class RabbitMqConfig {
 
 	private static final Logger log = Logger.getLogger(RabbitMqConfig.class);
 	public static final String ROUTING_KEY_PREFIX = "KK.EVENT";
+
+	/** How events are sent to RabbitMQ: on the request thread, or from a background thread. */
+	public enum PublishMode {
+		SYNC, ASYNC
+	}
 	private static final Pattern SPECIAL_CHARACTERS = Pattern.compile("[^*#a-zA-Z0-9 _.-]");
 	private static final Pattern SPACE = Pattern.compile(" ");
 	private static final Pattern DOT = Pattern.compile("\\.");
@@ -49,6 +54,11 @@ public class RabbitMqConfig {
 	// Null keeps the client's defaults
 	private Integer connectionTimeoutMs;
 	private Long networkRecoveryIntervalMs;
+
+	// Background publishing
+	private PublishMode publishMode;
+	private Integer publishBufferMaxMb;
+	private Long shutdownFlushTimeoutMs;
 	
 	public static String calculateRoutingKey(AdminEvent adminEvent, KeycloakSession session) {
 		//KK.EVENT.ADMIN.<REALM>.<RESULT>.<RESOURCE_TYPE>.<OPERATION>
@@ -135,6 +145,11 @@ public class RabbitMqConfig {
 		cfg.connectionTimeoutMs = connectionTimeoutMs.trim().isEmpty() ? null
 				: (int) parseNumber("connection_timeout_ms", connectionTimeoutMs, 0, Integer.MAX_VALUE);
 		cfg.networkRecoveryIntervalMs = number(config, "network_recovery_interval_ms", "5000", 1, Long.MAX_VALUE);
+
+		// Background publishing
+		cfg.publishMode = publishMode(config);
+		cfg.publishBufferMaxMb = (int) number(config, "publish_buffer_max_mb", "100", 1, Integer.MAX_VALUE);
+		cfg.shutdownFlushTimeoutMs = number(config, "shutdown_flush_timeout_ms", "5000", 0, Long.MAX_VALUE);
 		return cfg;
 		
 	}
@@ -172,6 +187,16 @@ public class RabbitMqConfig {
 			return false;
 		}
 		throw invalid(name, value, "true or false");
+	}
+
+	private static PublishMode publishMode(Scope config) {
+		String value = resolveConfigVar(config, "publish_mode", "sync");
+		for (PublishMode mode : PublishMode.values()) {
+			if (mode.name().equalsIgnoreCase(value.trim())) {
+				return mode;
+			}
+		}
+		throw invalid("publish_mode", value, "one of sync, async");
 	}
 
 	private static IllegalArgumentException invalid(String name, String value, String expected) {
@@ -335,6 +360,25 @@ public class RabbitMqConfig {
 	}
 	public void setNetworkRecoveryIntervalMs(Long networkRecoveryIntervalMs) {
 		this.networkRecoveryIntervalMs = networkRecoveryIntervalMs;
+	}
+
+	public PublishMode getPublishMode() {
+		return publishMode;
+	}
+	public void setPublishMode(PublishMode publishMode) {
+		this.publishMode = publishMode;
+	}
+	public Integer getPublishBufferMaxMb() {
+		return publishBufferMaxMb;
+	}
+	public void setPublishBufferMaxMb(Integer publishBufferMaxMb) {
+		this.publishBufferMaxMb = publishBufferMaxMb;
+	}
+	public Long getShutdownFlushTimeoutMs() {
+		return shutdownFlushTimeoutMs;
+	}
+	public void setShutdownFlushTimeoutMs(Long shutdownFlushTimeoutMs) {
+		this.shutdownFlushTimeoutMs = shutdownFlushTimeoutMs;
 	}
 
 }
