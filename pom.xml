@@ -63,6 +63,14 @@
             <version>${keycloak.version}</version>
         </dependency>
         
+        <!-- Supplied by Keycloak at runtime (1.39 in Keycloak 26.0), for the trace headers on messages -->
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-api</artifactId>
+            <version>1.39.0</version>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- https://mvnrepository.com/artifact/com.rabbitmq/amqp-client -->
 		<dependency>
 		    <groupId>com.rabbitmq</groupId>

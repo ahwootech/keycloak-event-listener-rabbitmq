@@ -1,6 +1,7 @@
 package com.github.aznamier.keycloak.event.provider;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -25,6 +26,12 @@ import org.mockito.ArgumentCaptor;
 
 import com.rabbitmq.client.AMQP;
 import com.rabbitmq.client.Channel;
+
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanContext;
+import io.opentelemetry.api.trace.TraceFlags;
+import io.opentelemetry.api.trace.TraceState;
+import io.opentelemetry.context.Scope;
 
 class RabbitMqEventListenerProviderTest {
 
@@ -93,6 +100,27 @@ class RabbitMqEventListenerProviderTest {
 		String messageId = publishLogin().getMessageId();
 
 		assertEquals(36, messageId.length(), "a UUID: " + messageId);
+	}
+
+	@Test
+	void messagesCarryTheRequestsTrace() throws Exception {
+		SpanContext trace = SpanContext.create("4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7", TraceFlags.getSampled(), TraceState.getDefault());
+
+		AMQP.BasicProperties props;
+		try (Scope scope = Span.wrap(trace).makeCurrent()) {
+			props = publishLogin();
+		}
+
+		assertEquals("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", props.getHeaders().get("traceparent"));
+		assertEquals("4bf92f3577b34da6a3ce929d0e0e4736", props.getHeaders().get("traceId"));
+	}
+
+	@Test
+	void withoutATraceThereAreNoTraceHeaders() throws Exception {
+		AMQP.BasicProperties props = publishLogin();
+
+		assertFalse(props.getHeaders().containsKey("traceparent"));
+		assertFalse(props.getHeaders().containsKey("traceId"));
 	}
 
 	/** Emits a LOGIN event, completes the request, and returns the properties it was published with. */

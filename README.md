@@ -129,4 +129,5 @@ being lost:
 
 ###### Messages
 Every message's `messageId` property is Keycloak's own ID for the event, which is also in the message body as `id`, so consumers can detect duplicates and find the event in Keycloak's stored events.
+When Keycloak tracing is enabled, every message also carries the trace of the request that produced the event, in the `traceparent` header (W3C format, so OpenTelemetry consumers can continue the trace) and as a plain `traceId` header.
   - `KK_TO_RMQ_PERSISTENT_MESSAGES=true` - messages are sent as persistent, so RabbitMQ writes them to disk and they survive a broker restart. Persistence is set on each message by the publisher, not by the queue: a durable queue survives a restart, but a classic queue drops the transient messages in it. It only helps for durable queues; quorum queues and streams persist every message whether or not this is set

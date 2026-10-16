@@ -69,6 +69,8 @@ public class RabbitMqEventListenerProvider implements EventListenerProvider {
 		
 		Map<String,Object> headers = new HashMap<>();
 		headers.put("__TypeId__", className);
+		// The trace of the request that produced the event, if Keycloak tracing is enabled
+		TraceHeaders.addTo(headers);
 		
 		Builder propsBuilder = new AMQP.BasicProperties.Builder()
 				.appId("Keycloak")
