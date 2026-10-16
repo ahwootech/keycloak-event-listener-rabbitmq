@@ -16,6 +16,7 @@ public class EventAdminNotificationMqMsg extends AdminEvent implements Serializa
 
 	public static EventAdminNotificationMqMsg create(AdminEvent adminEvent) {
 		EventAdminNotificationMqMsg msg = new EventAdminNotificationMqMsg();
+		msg.setId(adminEvent.getId());
 		msg.setAuthDetails(adminEvent.getAuthDetails());
 		msg.setError(adminEvent.getError());
 		msg.setOperationType(adminEvent.getOperationType());

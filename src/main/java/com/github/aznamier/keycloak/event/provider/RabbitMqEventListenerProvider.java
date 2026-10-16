@@ -3,6 +3,7 @@ package com.github.aznamier.keycloak.event.provider;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 
 import org.keycloak.events.Event;
 import org.keycloak.events.EventListenerProvider;
@@ -51,7 +52,7 @@ public class RabbitMqEventListenerProvider implements EventListenerProvider {
 		String routingKey = RabbitMqConfig.calculateRoutingKey(event, session);
 		String messageString = RabbitMqConfig.writeAsJson(msg, true);
 		
-		BasicProperties msgProps = this.getMessageProps(EventClientNotificationMqMsg.class.getName());
+		BasicProperties msgProps = this.getMessageProps(EventClientNotificationMqMsg.class.getName(), event.getId());
 		this.publishNotification(messageString, msgProps, routingKey);
 	}
 	
@@ -60,11 +61,11 @@ public class RabbitMqEventListenerProvider implements EventListenerProvider {
 		String routingKey = RabbitMqConfig.calculateRoutingKey(adminEvent, session);
 		String messageString = RabbitMqConfig.writeAsJson(msg, true);
 
-		BasicProperties msgProps = this.getMessageProps(EventAdminNotificationMqMsg.class.getName());
+		BasicProperties msgProps = this.getMessageProps(EventAdminNotificationMqMsg.class.getName(), adminEvent.getId());
 		this.publishNotification(messageString,msgProps, routingKey);
 	}
 	
-	private BasicProperties getMessageProps(String className) {
+	private BasicProperties getMessageProps(String className, String eventId) {
 		
 		Map<String,Object> headers = new HashMap<>();
 		headers.put("__TypeId__", className);
@@ -73,7 +74,10 @@ public class RabbitMqEventListenerProvider implements EventListenerProvider {
 				.appId("Keycloak")
 				.headers(headers)
 				.contentType("application/json")
-				.contentEncoding("UTF-8");
+				.contentEncoding("UTF-8")
+				// Keycloak's own event ID (also in the body as "id"), so consumers can detect duplicates and find the
+				// event in Keycloak; a random one if Keycloak didn't set it
+				.messageId(eventId != null ? eventId : UUID.randomUUID().toString());
 		if (Boolean.TRUE.equals(cfg.getPersistentMessages())) {
 			// Persistent delivery mode: RabbitMQ writes the message to disk, so it survives a broker restart. This is
 			// set per message by the publisher, not by the queue: a durable classic queue keeps itself, but drops

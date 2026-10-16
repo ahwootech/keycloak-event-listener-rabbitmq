@@ -16,6 +16,7 @@ public class EventClientNotificationMqMsg extends Event implements Serializable 
 	
 	public static EventClientNotificationMqMsg create(Event event) {
 		EventClientNotificationMqMsg msg = new EventClientNotificationMqMsg();
+		msg.setId(event.getId());
 		msg.setClientId(event.getClientId());
 		msg.setDetails(event.getDetails());
 		msg.setError(event.getError());

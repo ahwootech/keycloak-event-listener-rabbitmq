@@ -19,6 +19,7 @@ For example here is the notification of the user updated by administrator
 ```
 {
   "@class" : "com.github.aznamier.keycloak.event.provider.EventAdminNotificationMqMsg",
+  "id" : "********-****-****-****-**********",
   "time" : 1596951200408,
   "realmId" : "MYREALM",
   "authDetails" : {
@@ -127,4 +128,5 @@ being lost:
   - RabbitMQ confirms an event once it has routed it, or found no queue to route it to; an event no queue is bound for is confirmed and discarded
 
 ###### Messages
+Every message's `messageId` property is Keycloak's own ID for the event, which is also in the message body as `id`, so consumers can detect duplicates and find the event in Keycloak's stored events.
   - `KK_TO_RMQ_PERSISTENT_MESSAGES=true` - messages are sent as persistent, so RabbitMQ writes them to disk and they survive a broker restart. Persistence is set on each message by the publisher, not by the queue: a durable queue survives a restart, but a classic queue drops the transient messages in it. It only helps for durable queues; quorum queues and streams persist every message whether or not this is set
