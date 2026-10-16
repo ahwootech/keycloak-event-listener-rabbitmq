@@ -43,6 +43,7 @@ class RabbitMqConfigTest {
 		assertEquals(RabbitMqConfig.PublishMode.SYNC, cfg.getPublishMode(), "events are sent on the request thread unless turned on");
 		assertEquals(100, cfg.getPublishBufferMaxMb());
 		assertEquals(5000L, cfg.getShutdownFlushTimeoutMs());
+		assertEquals(5000L, cfg.getConfirmTimeoutMs());
 	}
 
 	@Test
@@ -157,7 +158,8 @@ class RabbitMqConfigTest {
 	@Test
 	void publishModeIsOneOfTheKnownModes() {
 		assertEquals(RabbitMqConfig.PublishMode.ASYNC, fromSettings("publish_mode", " Async ").getPublishMode());
-		assertEquals("keycloak-to-rabbitmq setting publish_mode (KK_TO_RMQ_PUBLISH_MODE) must be one of sync, async, got 'background'",
+		assertEquals(RabbitMqConfig.PublishMode.CONFIRMED, fromSettings("publish_mode", "confirmed").getPublishMode());
+		assertEquals("keycloak-to-rabbitmq setting publish_mode (KK_TO_RMQ_PUBLISH_MODE) must be one of sync, async, confirmed, got 'background'",
 				assertThrows(IllegalArgumentException.class, () -> fromSettings("publish_mode", "background")).getMessage());
 	}
 

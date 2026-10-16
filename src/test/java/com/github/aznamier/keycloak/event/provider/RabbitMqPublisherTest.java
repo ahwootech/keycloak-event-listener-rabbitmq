@@ -3,6 +3,7 @@ package com.github.aznamier.keycloak.event.provider;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
@@ -17,6 +18,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
@@ -32,8 +34,9 @@ class RabbitMqPublisherTest {
 	private RabbitMqConnectionManager manager;
 	private Channel channel;
 	private final AtomicReference<Channel> connected = new AtomicReference<>();
-	// What the channel saw, in order: "P<n>" for a publish of event n
+	// What the channel saw, in order: "P<n>" for a publish of event n, "C" / "N" for a confirm wait that acked / nacked
 	private final List<String> log = Collections.synchronizedList(new ArrayList<>());
+	private final AtomicLong nextSeqNo = new AtomicLong(1);
 	private RabbitMqPublisher publisher;
 
 	@BeforeEach
@@ -41,8 +44,10 @@ class RabbitMqPublisherTest {
 		manager = mock(RabbitMqConnectionManager.class);
 		channel = mock(Channel.class);
 		when(manager.getChannel()).thenAnswer(i -> connected.get());
+		when(channel.getNextPublishSeqNo()).thenAnswer(i -> nextSeqNo.get());
 		doAnswer(i -> {
 			log.add("P" + seqOf(i.getArgument(3)));
+			nextSeqNo.incrementAndGet();
 			return null;
 		}).when(channel).basicPublish(anyString(), anyString(), any(AMQP.BasicProperties.class), any(byte[].class));
 	}
@@ -57,7 +62,7 @@ class RabbitMqPublisherTest {
 	@Test
 	void syncModeSendsOnTheCallingThread() throws Exception {
 		connected.set(channel);
-		publisher = new RabbitMqPublisher(manager, cfg(false, 100));
+		publisher = new RabbitMqPublisher(manager, cfg(RabbitMqConfig.PublishMode.SYNC, 100));
 
 		publisher.publish("KK.EVENT.TEST", props(), body(1));
 
@@ -66,7 +71,7 @@ class RabbitMqPublisherTest {
 
 	@Test
 	void syncModeDropsEventsWhileDisconnectedWithoutWaiting() throws Exception {
-		publisher = new RabbitMqPublisher(manager, cfg(false, 100));
+		publisher = new RabbitMqPublisher(manager, cfg(RabbitMqConfig.PublishMode.SYNC, 100));
 
 		long start = System.nanoTime();
 		publisher.publish("KK.EVENT.TEST", props(), body(1));
@@ -77,7 +82,7 @@ class RabbitMqPublisherTest {
 
 	@Test
 	void asyncModeBuffersWhileDisconnectedAndSendsInOrder() throws Exception {
-		publisher = new RabbitMqPublisher(manager, cfg(true, 100));
+		publisher = new RabbitMqPublisher(manager, cfg(RabbitMqConfig.PublishMode.ASYNC, 100));
 
 		for (int n = 0; n < 50; n++) {
 			publisher.publish("KK.EVENT.TEST", props(), body(n));
@@ -102,7 +107,7 @@ class RabbitMqPublisherTest {
 			return null;
 		}).when(channel).basicPublish(anyString(), anyString(), any(AMQP.BasicProperties.class), any(byte[].class));
 		connected.set(channel);
-		publisher = new RabbitMqPublisher(manager, cfg(true, 100));
+		publisher = new RabbitMqPublisher(manager, cfg(RabbitMqConfig.PublishMode.ASYNC, 100));
 
 		for (int n = 0; n < 10; n++) {
 			publisher.publish("KK.EVENT.TEST", props(), body(n));
@@ -114,7 +119,7 @@ class RabbitMqPublisherTest {
 
 	@Test
 	void fullBufferDropsNewEventsAndKeepsTheEarliest() throws Exception {
-		publisher = new RabbitMqPublisher(manager, cfg(true, 1));
+		publisher = new RabbitMqPublisher(manager, cfg(RabbitMqConfig.PublishMode.ASYNC, 1));
 		byte[] padding = new byte[100_000];
 
 		// About 100 KB each, so a 1 MB buffer holds 10 of them
@@ -130,7 +135,7 @@ class RabbitMqPublisherTest {
 
 	@Test
 	void shutdownSendsWhatIsStillBuffered() throws Exception {
-		publisher = new RabbitMqPublisher(manager, cfg(true, 100));
+		publisher = new RabbitMqPublisher(manager, cfg(RabbitMqConfig.PublishMode.ASYNC, 100));
 		for (int n = 0; n < 20; n++) {
 			publisher.publish("KK.EVENT.TEST", props(), body(n));
 		}
@@ -144,7 +149,7 @@ class RabbitMqPublisherTest {
 
 	@Test
 	void shutdownGivesUpAfterTheFlushTimeout() throws Exception {
-		publisher = new RabbitMqPublisher(manager, cfg(true, 100));
+		publisher = new RabbitMqPublisher(manager, cfg(RabbitMqConfig.PublishMode.ASYNC, 100));
 		publisher.publish("KK.EVENT.TEST", props(), body(0));
 
 		long start = System.nanoTime();
@@ -155,12 +160,73 @@ class RabbitMqPublisherTest {
 		assertTrue(log.isEmpty());
 	}
 
+	@Test
+	void confirmsResendAFailedBatchOneEventAtATime() throws Exception {
+		AtomicInteger waits = new AtomicInteger();
+		when(channel.waitForConfirms(anyLong())).thenAnswer(i -> {
+			// The first batch is acked, the second nacked (e.g. a queue that is full with overflow=reject-publish)
+			boolean acked = waits.incrementAndGet() != 2;
+			log.add(acked ? "C" : "N");
+			return acked;
+		});
+		publisher = new RabbitMqPublisher(manager, cfg(RabbitMqConfig.PublishMode.CONFIRMED, 100));
+
+		// While disconnected the worker holds event 0 as its batch; 1-4 wait in the buffer and form the next batch
+		publisher.publish("KK.EVENT.TEST", props(), body(0));
+		Thread.sleep(300);
+		for (int n = 1; n < 5; n++) {
+			publisher.publish("KK.EVENT.TEST", props(), body(n));
+		}
+		connected.set(channel);
+		await(() -> log.stream().filter("C"::equals).count() == 5);
+
+		// Event 0 is the first batch on its own; 1-4 are batched, nacked, then resent one at a time
+		assertEquals(Arrays.asList("P0", "C", "P1", "P2", "P3", "P4", "N", "P1", "C", "P2", "C", "P3", "C", "P4", "C"), log);
+	}
+
+	@Test
+	void confirmedModeBuffersWhileDisconnected() throws Exception {
+		when(channel.waitForConfirms(anyLong())).thenAnswer(i -> {
+			log.add("C");
+			return true;
+		});
+		publisher = new RabbitMqPublisher(manager, cfg(RabbitMqConfig.PublishMode.CONFIRMED, 100));
+
+		// Buffered while disconnected rather than dropped, as in sync mode
+		publisher.publish("KK.EVENT.TEST", props(), body(0));
+		connected.set(channel);
+		await(() -> log.size() == 2);
+
+		assertEquals(Arrays.asList("P0", "C"), log);
+	}
+
+	@Test
+	void confirmsTreatABatchAsUnconfirmedWhenTheChannelWasRecovered() throws Exception {
+		AtomicInteger waits = new AtomicInteger();
+		when(channel.waitForConfirms(anyLong())).thenAnswer(i -> {
+			if (waits.incrementAndGet() == 1) {
+				// Automatic recovery replaced the channel: nothing outstanding to confirm, sequence numbers restart
+				nextSeqNo.set(1);
+			}
+			log.add("C");
+			return true;
+		});
+		connected.set(channel);
+		publisher = new RabbitMqPublisher(manager, cfg(RabbitMqConfig.PublishMode.CONFIRMED, 100));
+
+		publisher.publish("KK.EVENT.TEST", props(), body(0));
+		await(() -> log.size() >= 4);
+
+		assertEquals(Arrays.asList("P0", "C", "P0", "C"), log.subList(0, 4), "the batch is sent again");
+	}
+
 	// --- helpers ---
 
-	static RabbitMqConfig cfg(boolean async, int bufferMb) {
+	static RabbitMqConfig cfg(RabbitMqConfig.PublishMode mode, int bufferMb) {
 		RabbitMqConfig cfg = new RabbitMqConfig();
 		cfg.setExchange("amq.topic");
-		cfg.setPublishMode(async ? RabbitMqConfig.PublishMode.ASYNC : RabbitMqConfig.PublishMode.SYNC);
+		cfg.setPublishMode(mode);
+		cfg.setConfirmTimeoutMs(1000L);
 		cfg.setPublishBufferMaxMb(bufferMb);
 		cfg.setShutdownFlushTimeoutMs(500L);
 		return cfg;

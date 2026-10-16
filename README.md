@@ -79,6 +79,7 @@ An invalid value, such as a number with extra characters (`5672x`), a number out
   - `KK_TO_RMQ_PUBLISH_MODE` - default: *sync*
   - `KK_TO_RMQ_PUBLISH_BUFFER_MAX_MB` - default: *100*
   - `KK_TO_RMQ_SHUTDOWN_FLUSH_TIMEOUT_MS` - default: *5000*
+  - `KK_TO_RMQ_CONFIRM_TIMEOUT_MS` - default: *5000*
 
 ###### TLS
 With `KK_TO_RMQ_USE_TLS=true` the connection uses TLS 1.3 or 1.2, whichever both sides support, and checks RabbitMQ's certificate:
@@ -104,13 +105,22 @@ Java client's own:
 `KK_TO_RMQ_PUBLISH_MODE` sets how events are sent:
   - `sync` (the default) - on the Keycloak request thread, once the request's transaction completes
   - `async` - from a single background thread, so requests such as logins never wait on RabbitMQ
+  - `confirmed` - like `async`, and each event is kept until RabbitMQ confirms it has it (see [publisher confirms](#publisher-confirms))
 
-With `async`:
+With `async` or `confirmed`:
   - while RabbitMQ is unreachable or not accepting messages, events wait in an in-memory buffer and are sent in order once it is back
   - `KK_TO_RMQ_PUBLISH_BUFFER_MAX_MB` limits the buffer's memory (each buffered event counts as about 1.4 KB, so 100 MB holds roughly 75,000 events; size it as event rate × the longest outage to ride out × 1.4 KB); when it is full, new events are dropped. A warning is logged when it passes half full
   - on shutdown, buffered events are sent for up to `KK_TO_RMQ_SHUTDOWN_FLUSH_TIMEOUT_MS`
   - buffered events are lost if Keycloak stops or crashes before they are sent
-  - events sent just before a connection drops, before the client notices, can be lost without an error
+  - with `async`, events sent just before a connection drops, before the client notices, can be lost without an error
 
 Every buffered event that is never sent is logged at ERROR level with the prefix `keycloak-to-rabbitmq PUBLISH FAILED`,
 which can be used for alerting. Dropped events are reported at most once a minute, with a count.
+
+###### Publisher confirms
+With `KK_TO_RMQ_PUBLISH_MODE=confirmed`, events are sent in batches and only removed from the buffer once RabbitMQ
+confirms it has them, so events sent into a connection that has just died are sent again once it is back instead of
+being lost:
+  - a batch that RabbitMQ rejects, or doesn't confirm within `KK_TO_RMQ_CONFIRM_TIMEOUT_MS`, is sent again, one event at a time, so events RabbitMQ accepts aren't held up by one it keeps rejecting
+  - consumers may therefore receive an event more than once
+  - RabbitMQ confirms an event once it has routed it, or found no queue to route it to; an event no queue is bound for is confirmed and discarded

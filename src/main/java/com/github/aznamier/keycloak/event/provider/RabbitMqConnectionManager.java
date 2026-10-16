@@ -119,7 +119,12 @@ class RabbitMqConnectionManager {
 			Channel ch = channel;
 			if (ch == null || !ch.isOpen()) {
 				// Also covers a channel closed by a channel-level error, which automatic recovery does not reopen
-				channel = conn.createChannel();
+				ch = conn.createChannel();
+				if (RabbitMqPublisher.confirmsEnabled(cfg)) {
+					// Automatic recovery restores confirm mode on the recovered channel
+					ch.confirmSelect();
+				}
+				channel = ch;
 			}
 		} catch (IOException | TimeoutException e) {
 			long retryMs = connectionFactory.getNetworkRecoveryInterval();
