@@ -261,6 +261,59 @@ class RabbitMqResilienceIT {
 	}
 
 	@Test
+	void publisherConfirmsLoseNothingWhenTheConnectionIsCutMidStream() throws Exception {
+		settings.put("publish_mode", "confirmed");
+		settings.put("confirm_timeout_ms", "1000");
+		startPlugin();
+		RabbitMqConnectionManager manager = manager();
+		await(() -> manager.getChannel() != null);
+		warmUp();
+
+		long slowestMs = 0;
+		int seq = 0;
+		int sentBeforeNoticed = 0;
+		int sentWhileDown = 0;
+
+		for (int i = 0; i < 50; i++, seq++) {
+			slowestMs = Math.max(slowestMs, timedSend(seq));
+		}
+		blackHole();
+		long deadline = System.currentTimeMillis() + 20_000;
+		while (sentWhileDown < 100) {
+			assertTrue(System.currentTimeMillis() < deadline, "the plugin never noticed the outage");
+			if (manager.getChannel() == null) {
+				sentWhileDown++;
+			} else {
+				sentBeforeNoticed++;
+			}
+			slowestMs = Math.max(slowestMs, timedSend(seq));
+			seq++;
+			Thread.sleep(20);
+		}
+		restore();
+		await(() -> manager.getChannel() != null);
+		for (int i = 0; i < 50; i++, seq++) {
+			slowestMs = Math.max(slowestMs, timedSend(seq));
+		}
+		assertTrue(sentBeforeNoticed > 0, "no events went into the dead connection, so confirms weren't tested");
+		assertTrue(slowestMs < 200, "a request waited " + slowestMs + " ms on RabbitMQ");
+
+		// An event whose confirm was lost is sent again, so it can arrive twice; none may be lost, and the
+		// events must first arrive in order
+		List<Integer> firstArrivals = new ArrayList<>();
+		for (int received : receiveAll(seq)) {
+			if (!firstArrivals.contains(received)) {
+				firstArrivals.add(received);
+			}
+		}
+		List<Integer> expected = new ArrayList<>();
+		for (int i = 0; i < seq; i++) {
+			expected.add(i);
+		}
+		assertEquals(expected, firstArrivals, "events were lost or arrived out of order");
+	}
+
+	@Test
 	void backgroundPublishingDoesNotMakeRequestsWaitWhileRabbitMqBlocksPublishers() throws Exception {
 		settings.put("publish_mode", "async");
 		startPlugin();

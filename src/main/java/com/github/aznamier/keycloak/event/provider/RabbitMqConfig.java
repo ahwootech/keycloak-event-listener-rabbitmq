@@ -22,9 +22,12 @@ public class RabbitMqConfig {
 	private static final Logger log = Logger.getLogger(RabbitMqConfig.class);
 	public static final String ROUTING_KEY_PREFIX = "KK.EVENT";
 
-	/** How events are sent to RabbitMQ: on the request thread, or from a background thread. */
+	/**
+	 * How events are sent to RabbitMQ: on the request thread, from a background thread, or from a background thread
+	 * that keeps each event until RabbitMQ confirms it.
+	 */
 	public enum PublishMode {
-		SYNC, ASYNC
+		SYNC, ASYNC, CONFIRMED
 	}
 	private static final Pattern SPECIAL_CHARACTERS = Pattern.compile("[^*#a-zA-Z0-9 _.-]");
 	private static final Pattern SPACE = Pattern.compile(" ");
@@ -59,6 +62,7 @@ public class RabbitMqConfig {
 	private PublishMode publishMode;
 	private Integer publishBufferMaxMb;
 	private Long shutdownFlushTimeoutMs;
+	private Long confirmTimeoutMs;
 	
 	public static String calculateRoutingKey(AdminEvent adminEvent, KeycloakSession session) {
 		//KK.EVENT.ADMIN.<REALM>.<RESULT>.<RESOURCE_TYPE>.<OPERATION>
@@ -155,6 +159,7 @@ public class RabbitMqConfig {
 		cfg.publishMode = publishMode(config);
 		cfg.publishBufferMaxMb = (int) number(config, "publish_buffer_max_mb", "100", 1, Integer.MAX_VALUE);
 		cfg.shutdownFlushTimeoutMs = number(config, "shutdown_flush_timeout_ms", "5000", 0, Long.MAX_VALUE);
+		cfg.confirmTimeoutMs = number(config, "confirm_timeout_ms", "5000", 1, Long.MAX_VALUE);
 		return cfg;
 		
 	}
@@ -201,7 +206,7 @@ public class RabbitMqConfig {
 				return mode;
 			}
 		}
-		throw invalid("publish_mode", value, "one of sync, async");
+		throw invalid("publish_mode", value, "one of sync, async, confirmed");
 	}
 
 	private static IllegalArgumentException invalid(String name, String value, String expected) {
@@ -384,6 +389,13 @@ public class RabbitMqConfig {
 	}
 	public void setShutdownFlushTimeoutMs(Long shutdownFlushTimeoutMs) {
 		this.shutdownFlushTimeoutMs = shutdownFlushTimeoutMs;
+	}
+
+	public Long getConfirmTimeoutMs() {
+		return confirmTimeoutMs;
+	}
+	public void setConfirmTimeoutMs(Long confirmTimeoutMs) {
+		this.confirmTimeoutMs = confirmTimeoutMs;
 	}
 
 }

@@ -1,5 +1,8 @@
 package com.github.aznamier.keycloak.event.provider;
 
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -16,6 +19,9 @@ import com.rabbitmq.client.Channel;
  * In async mode, messages wait in an in-memory buffer while RabbitMQ is unreachable and are sent in order
  * once the connection is back. When the buffer reaches its size limit, new messages are dropped and logged.
  *
+ * With publish_mode confirmed, messages are sent from the background thread in batches and only removed from the buffer
+ * once RabbitMQ confirms them; a batch that is not confirmed is sent again, so consumers may see duplicates.
+ *
  * Internal to the plugin, so it can change in any release.
  */
 class RabbitMqPublisher {
@@ -30,6 +36,7 @@ class RabbitMqPublisher {
 	private static final long POLL_INTERVAL_MS = 500;
 	private static final long RETRY_INTERVAL_MS = 1000;
 	private static final long DROP_REPORT_INTERVAL_MS = 60_000;
+	private static final int CONFIRM_BATCH_SIZE = 100;
 
 	private final RabbitMqConnectionManager connectionManager;
 	private final RabbitMqConfig cfg;
@@ -41,6 +48,7 @@ class RabbitMqPublisher {
 	private final AtomicLong droppedSinceReport = new AtomicLong();
 	private final AtomicLong lastDropReport = new AtomicLong();
 	private final Thread worker;
+	private final boolean confirms;
 	private volatile boolean closing;
 	private volatile long flushDeadline;
 	private volatile boolean halfFullWarned;
@@ -49,6 +57,7 @@ class RabbitMqPublisher {
 		this.connectionManager = connectionManager;
 		this.cfg = cfg;
 		this.maxBufferBytes = cfg.getPublishBufferMaxMb() * 1024L * 1024L;
+		this.confirms = confirmsEnabled(cfg);
 		if (cfg.getPublishMode() != RabbitMqConfig.PublishMode.SYNC) {
 			worker = new Thread(this::runWorker, "keycloak-to-rabbitmq-publisher");
 			worker.setDaemon(true);
@@ -56,6 +65,10 @@ class RabbitMqPublisher {
 		} else {
 			worker = null;
 		}
+	}
+
+	static boolean confirmsEnabled(RabbitMqConfig cfg) {
+		return cfg.getPublishMode() == RabbitMqConfig.PublishMode.CONFIRMED;
 	}
 
 	void publish(String routingKey, BasicProperties props, byte[] body) {
@@ -76,8 +89,9 @@ class RabbitMqPublisher {
 		flushDeadline = System.currentTimeMillis() + cfg.getShutdownFlushTimeoutMs();
 		closing = true;
 		try {
-			// Allow for a send that started just before the deadline
-			worker.join(cfg.getShutdownFlushTimeoutMs() + POLL_INTERVAL_MS + RETRY_INTERVAL_MS);
+			// Allow for a send or confirm wait that started just before the deadline
+			long confirmWaitMs = confirms ? cfg.getConfirmTimeoutMs() : 0;
+			worker.join(cfg.getShutdownFlushTimeoutMs() + POLL_INTERVAL_MS + RETRY_INTERVAL_MS + confirmWaitMs);
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 		}
@@ -152,55 +166,88 @@ class RabbitMqPublisher {
 	}
 
 	private void sendLoop() {
-		PendingMessage msg = null;
+		List<PendingMessage> batch = new ArrayList<>();
+		// With confirms: whether the current batch may have been (partly) published, but was not confirmed
+		boolean maybeSent = false;
+		// With confirms: after a batch fails, its events are resent one at a time, so events RabbitMQ accepts
+		// are not held back by one it keeps rejecting (e.g. a full queue with overflow=reject-publish)
+		boolean oneByOne = false;
 		boolean stalled = false;
 		while (true) {
 			try {
-				if (msg == null) {
-					msg = buffer.poll(POLL_INTERVAL_MS, TimeUnit.MILLISECONDS);
+				if (batch.isEmpty()) {
+					PendingMessage first = buffer.poll(POLL_INTERVAL_MS, TimeUnit.MILLISECONDS);
+					if (first != null) {
+						batch.add(first);
+						if (confirms) {
+							fillBatch(batch);
+						}
+					}
 				}
 				reportDrops(null, false);
-				if (msg == null) {
+				if (batch.isEmpty()) {
 					if (closing) {
 						return;
 					}
 					continue;
 				}
 				if (closing && System.currentTimeMillis() > flushDeadline) {
-					log.errorf("%s: shutting down, %d buffered event(s) not sent", PUBLISH_FAILED, buffer.size() + 1);
+					int notSent = buffer.size() + batch.size();
+					if (maybeSent) {
+						log.errorf("%s: shutting down, %d buffered event(s) not sent, %d of them may have been sent but were not confirmed",
+								PUBLISH_FAILED, notSent, batch.size());
+					} else {
+						log.errorf("%s: shutting down, %d buffered event(s) not sent", PUBLISH_FAILED, notSent);
+					}
 					return;
 				}
 
+				List<PendingMessage> sending = oneByOne ? batch.subList(0, 1) : batch;
 				Channel channel = connectionManager.getChannel();
 				Exception error = null;
 				if (channel != null) {
 					try {
-						channel.basicPublish(cfg.getExchange(), msg.routingKey, msg.props, msg.body);
+						maybeSent = confirms;
+						send(channel, sending);
 					} catch (Exception e) {
 						error = e;
 					}
 				}
 
 				if (channel != null && error == null) {
-					log.tracef("keycloak-to-rabbitmq SUCCESS sending message: %s%n", msg.routingKey);
+					if (log.isTraceEnabled()) {
+						for (PendingMessage msg : sending) {
+							log.tracef("keycloak-to-rabbitmq SUCCESS sending message: %s%n", msg.routingKey);
+						}
+					}
 					if (stalled) {
 						stalled = false;
 						log.infof("keycloak-to-rabbitmq sending resumed, %d buffered event(s) left to send", buffer.size());
 					}
-					if (bufferedBytes.addAndGet(-msg.sizeBytes) == 0) {
+					long sentBytes = 0;
+					for (PendingMessage msg : sending) {
+						sentBytes += msg.sizeBytes;
+					}
+					long remaining = bufferedBytes.addAndGet(-sentBytes);
+					if (remaining == 0) {
 						halfFullWarned = false;
 					}
-					msg = null;
+					sending.clear();
+					if (batch.isEmpty()) {
+						maybeSent = false;
+						oneByOne = false;
+					}
 				} else {
-					// Keep the message and retry; it stays at the front so order is preserved
+					oneByOne = confirms;
+					// Keep the batch and retry; it stays at the front so order is preserved
 					if (!stalled) {
 						stalled = true;
 						if (error != null) {
 							log.errorf(error, "keycloak-to-rabbitmq ERROR sending message, buffering events until it succeeds: %s",
-									msg.routingKey);
+									batch.get(0).routingKey);
 						} else {
 							log.errorf("keycloak-to-rabbitmq ERROR sending message, not connected to RabbitMQ, buffering events until reconnected: %s",
-									msg.routingKey);
+									batch.get(0).routingKey);
 						}
 					}
 					Thread.sleep(RETRY_INTERVAL_MS);
@@ -209,6 +256,42 @@ class RabbitMqPublisher {
 				Thread.currentThread().interrupt();
 				return;
 			}
+		}
+	}
+
+	/**
+	 * Adds buffered messages to the batch, up to the batch size.
+	 */
+	private void fillBatch(List<PendingMessage> batch) {
+		buffer.drainTo(batch, CONFIRM_BATCH_SIZE - batch.size());
+	}
+
+	/**
+	 * Publishes the batch and, with publisher confirms, waits until RabbitMQ has confirmed all of it.
+	 * Throws if any message could not be published or was not confirmed.
+	 */
+	private void send(Channel channel, List<PendingMessage> batch) throws Exception {
+		long firstSeqNo = confirms ? channel.getNextPublishSeqNo() : 0;
+		for (PendingMessage msg : batch) {
+			channel.basicPublish(cfg.getExchange(), msg.routingKey, msg.props, msg.body);
+		}
+		if (!confirms) {
+			return;
+		}
+		long expectedSeqNo = firstSeqNo + batch.size();
+		checkNotRecovered(channel, expectedSeqNo);
+		boolean acked = channel.waitForConfirms(cfg.getConfirmTimeoutMs());
+		// A channel recovered after a connection drop starts with nothing to confirm, so waitForConfirms
+		// on it succeeds even though the batch was published on the old connection
+		checkNotRecovered(channel, expectedSeqNo);
+		if (!acked) {
+			throw new IOException("RabbitMQ rejected (nacked) at least one of " + batch.size() + " event(s)");
+		}
+	}
+
+	private static void checkNotRecovered(Channel channel, long expectedSeqNo) throws IOException {
+		if (channel.getNextPublishSeqNo() != expectedSeqNo) {
+			throw new IOException("connection to RabbitMQ was recovered before the events were confirmed");
 		}
 	}
 
