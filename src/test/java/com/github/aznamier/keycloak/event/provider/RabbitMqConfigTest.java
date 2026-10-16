@@ -44,6 +44,7 @@ class RabbitMqConfigTest {
 		assertEquals(100, cfg.getPublishBufferMaxMb());
 		assertEquals(5000L, cfg.getShutdownFlushTimeoutMs());
 		assertEquals(5000L, cfg.getConfirmTimeoutMs());
+		assertFalse(cfg.getPersistentMessages());
 	}
 
 	@Test
