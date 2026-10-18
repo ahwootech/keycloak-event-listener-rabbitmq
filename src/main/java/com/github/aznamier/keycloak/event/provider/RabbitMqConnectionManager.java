@@ -99,15 +99,15 @@ public class RabbitMqConnectionManager {
 			Connection conn = connection;
 			if (conn == null) {
 				if (failedAttempts == 0) {
-					log.infof("keycloak-to-rabbitmq connecting to RabbitMQ at %s:%d", cfg.getHostUrl(), cfg.getPort());
+					log.infof("keycloak-to-rabbitmq connecting to RabbitMQ at %s", cfg.describeAddresses());
 				}
-				conn = connectionFactory.newConnection();
+				conn = connectionFactory.newConnection(cfg.getAddresses());
 				connection = conn;
 				if (failedAttempts == 0) {
-					log.infof("keycloak-to-rabbitmq connected to RabbitMQ at %s:%d", cfg.getHostUrl(), cfg.getPort());
+					log.infof("keycloak-to-rabbitmq connected to RabbitMQ at %s", cfg.describeAddresses());
 				} else {
-					log.infof("keycloak-to-rabbitmq connected to RabbitMQ at %s:%d after %d failed attempts",
-							cfg.getHostUrl(), cfg.getPort(), failedAttempts);
+					log.infof("keycloak-to-rabbitmq connected to RabbitMQ at %s after %d failed attempts",
+							cfg.describeAddresses(), failedAttempts);
 				}
 				failedAttempts = 0;
 			} else if (!conn.isOpen()) {
@@ -124,11 +124,11 @@ public class RabbitMqConnectionManager {
 			failedAttempts++;
 			// Full stack trace only on the first failure, so a long outage doesn't flood the logs
 			if (failedAttempts == 1) {
-				log.errorf(e, "keycloak-to-rabbitmq ERROR on connection to RabbitMQ at %s:%d, retrying every %d ms",
-						cfg.getHostUrl(), cfg.getPort(), retryMs);
+				log.errorf(e, "keycloak-to-rabbitmq ERROR on connection to RabbitMQ at %s, retrying every %d ms",
+						cfg.describeAddresses(), retryMs);
 			} else {
-				log.errorf("keycloak-to-rabbitmq ERROR on connection to RabbitMQ at %s:%d (attempt %d), retrying in %d ms: %s",
-						cfg.getHostUrl(), cfg.getPort(), failedAttempts, retryMs, e);
+				log.errorf("keycloak-to-rabbitmq ERROR on connection to RabbitMQ at %s (attempt %d), retrying in %d ms: %s",
+						cfg.describeAddresses(), failedAttempts, retryMs, e);
 			}
 			scheduleConnect(retryMs);
 		}

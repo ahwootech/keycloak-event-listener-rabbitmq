@@ -158,6 +158,39 @@ class RabbitMqResilienceIT {
 		await(() -> manager.getChannel() != null);
 	}
 
+	@Test
+	void withSeveralHostsItConnectsAndRecoversThroughWhicheverIsReachable() throws Exception {
+		// A second route to the same RabbitMQ, so each "host" can fail on its own
+		ToxiproxyClient client = new ToxiproxyClient(toxiproxy.getHost(), toxiproxy.getControlPort());
+		Proxy existing = client.getProxyOrNull("rabbitmq-b");
+		if (existing != null) {
+			existing.delete();
+		}
+		Proxy proxyB = client.createProxy("rabbitmq-b", "0.0.0.0:" + (PROXY_PORT + 1), "rabbitmq:5672");
+		String hostA = toxiproxy.getHost() + ":" + toxiproxy.getMappedPort(PROXY_PORT);
+		String hostB = toxiproxy.getHost() + ":" + toxiproxy.getMappedPort(PROXY_PORT + 1);
+		settings.put("url", hostA + "," + hostB);
+		try {
+			// Only B is reachable at startup
+			proxy.disable();
+			startPlugin();
+			RabbitMqConnectionManager manager = manager();
+			await(() -> manager.getChannel() != null);
+
+			// B fails like a dead host, A is back: recovery has to switch to A
+			proxy.enable();
+			proxyB.toxics().timeout("black-hole-up", ToxicDirection.UPSTREAM, 0);
+			proxyB.toxics().timeout("black-hole-down", ToxicDirection.DOWNSTREAM, 0);
+			await(() -> manager.getChannel() == null);
+			await(() -> manager.getChannel() != null);
+
+			sendEvent("after-failover");
+			assertTrue(new String(awaitMessage().getBody(), StandardCharsets.UTF_8).contains("after-failover"));
+		} finally {
+			proxyB.delete();
+		}
+	}
+
 	private void startPlugin() {
 		Scope scope = mock(Scope.class);
 		when(scope.get(anyString())).thenAnswer(i -> settings.get(i.<String>getArgument(0)));

@@ -61,7 +61,7 @@ therefore its easy for Rabbit client to subscribe to selective combinations eg:
 Each setting can also be given as a Keycloak option, which takes precedence: `KK_TO_RMQ_HEARTBEAT_SECONDS` as
 `--spi-events-listener-keycloak-to-rabbitmq-heartbeat-seconds` (or the `KC_SPI_EVENTS_LISTENER_KEYCLOAK_TO_RABBITMQ_HEARTBEAT_SECONDS` environment variable), and so on.
 An invalid value, such as a number with extra characters (`5672x`), a number out of range, or a true/false setting set to anything other than `true` or `false`, stops Keycloak from starting with an error naming the setting.
-  - `KK_TO_RMQ_URL` - default: *localhost*
+  - `KK_TO_RMQ_URL` - default: *localhost*. One or more RabbitMQ hosts, comma-separated, each optionally with `:port` (otherwise `KK_TO_RMQ_PORT`; IPv6 addresses in brackets), e.g. `rabbit-1,rabbit-2,rabbit-3:5673`. The connection and its automatic recovery try them in turn
   - `KK_TO_RMQ_PORT` - default: *5672*
   - `KK_TO_RMQ_VHOST` - required, e.g. */* for RabbitMQ's default virtual host
   - `KK_TO_RMQ_EXCHANGE` - default: *amq.topic*

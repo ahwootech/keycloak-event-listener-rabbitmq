@@ -8,7 +8,12 @@ import org.keycloak.events.admin.AdminEvent;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.util.JsonSerialization;
 
+import com.rabbitmq.client.Address;
+
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
+import java.util.stream.Collectors;
 import java.util.regex.Pattern;
 
 
@@ -102,6 +107,8 @@ public class RabbitMqConfig {
 		
 		cfg.hostUrl = resolveConfigVar(config, "url", "localhost");
 		cfg.port = (int) number(config, "port", "5672", 1, 65535);
+		// Fails startup on an invalid list of hosts
+		cfg.getAddresses();
 		cfg.username = resolveConfigVar(config, "username", "admin");
 		cfg.password = resolveConfigVar(config, "password", "admin");
 		// Required: RabbitMQ rejects an empty name, and a default of "/" would silently send events to the wrong
@@ -196,6 +203,44 @@ public class RabbitMqConfig {
 	}
 	
 	
+	/**
+	 * The RabbitMQ hosts to connect to: the url setting lists one or more, comma-separated, each optionally with
+	 * :port (otherwise the port setting). The client tries them in turn when connecting and recovering.
+	 */
+	public List<Address> getAddresses() {
+		List<Address> addresses = new ArrayList<>();
+		for (String entry : hostUrl.split(",")) {
+			if (entry.trim().isEmpty()) {
+				continue;
+			}
+			Address address;
+			try {
+				address = Address.parseAddress(entry.trim());
+			} catch (RuntimeException e) {
+				throw invalidUrl();
+			}
+			if (address.getPort() == -1) {
+				address = new Address(address.getHost(), port);
+			} else if (address.getPort() < 1 || address.getPort() > 65535) {
+				throw invalidUrl();
+			}
+			addresses.add(address);
+		}
+		if (addresses.isEmpty()) {
+			throw invalidUrl();
+		}
+		return addresses;
+	}
+
+	private IllegalArgumentException invalidUrl() {
+		return invalid("url", hostUrl, "one or more comma-separated hosts, each optionally with :port (IPv6 addresses in brackets)");
+	}
+
+	/** The hosts, for log messages: e.g. "rabbit-1:5672, rabbit-2:5672". */
+	public String describeAddresses() {
+		return getAddresses().stream().map(a -> a.getHost() + ":" + a.getPort()).collect(Collectors.joining(", "));
+	}
+
 	public String getHostUrl() {
 		return hostUrl;
 	}

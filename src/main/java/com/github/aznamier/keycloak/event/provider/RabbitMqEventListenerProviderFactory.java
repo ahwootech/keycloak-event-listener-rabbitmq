@@ -35,8 +35,6 @@ public class RabbitMqEventListenerProviderFactory implements EventListenerProvid
         this.connectionFactory.setUsername(cfg.getUsername());
         this.connectionFactory.setPassword(cfg.getPassword());
         this.connectionFactory.setVirtualHost(cfg.getVhost());
-        this.connectionFactory.setHost(cfg.getHostUrl());
-        this.connectionFactory.setPort(cfg.getPort());
         this.connectionFactory.setAutomaticRecoveryEnabled(true);
         this.connectionFactory.setRequestedHeartbeat(cfg.getHeartbeatSeconds());
         // One timeout for each step of a connection attempt: the TCP connection, then the AMQP handshake.

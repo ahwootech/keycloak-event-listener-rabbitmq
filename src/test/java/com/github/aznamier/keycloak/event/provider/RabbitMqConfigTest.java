@@ -82,6 +82,26 @@ class RabbitMqConfigTest {
 	}
 
 	@Test
+	void urlListsOneOrMoreHostsEachWithAnOptionalPort() {
+		Map<String, String> settings = new HashMap<>();
+		settings.put("url", "rabbit-1, rabbit-2:5673,,[::1]:5674, [fe80::1], rabbit-3");
+		settings.put("port", "5671");
+
+		assertEquals("rabbit-1:5671, rabbit-2:5673, [::1]:5674, [fe80::1]:5671, rabbit-3:5671", fromSettings(settings).describeAddresses());
+		assertEquals("localhost:5672", fromSettings(new HashMap<>()).describeAddresses());
+		assertEquals("rabbit:5673", fromSettings("url", "rabbit:5673").describeAddresses());
+	}
+
+	@Test
+	void anInvalidUrlStopsStartup() {
+		assertEquals("keycloak-to-rabbitmq setting url (KK_TO_RMQ_URL) must be one or more comma-separated hosts, each optionally with :port (IPv6 addresses in brackets), got 'rabbit-1,rabbit-2:abc'",
+				assertThrows(IllegalArgumentException.class, () -> fromSettings("url", "rabbit-1,rabbit-2:abc")).getMessage());
+		assertThrows(IllegalArgumentException.class, () -> fromSettings("url", "rabbit:70000"));
+		assertThrows(IllegalArgumentException.class, () -> fromSettings("url", " , "));
+		assertThrows(IllegalArgumentException.class, () -> fromSettings("url", "fe80::1"), "IPv6 needs brackets");
+	}
+
+	@Test
 	void surroundingSpacesAndCapitalsAreAccepted() {
 		assertEquals(5673, fromSettings("port", " 5673 ").getPort());
 		assertTrue(fromSettings("use_tls", " TRUE ").getUseTls());
