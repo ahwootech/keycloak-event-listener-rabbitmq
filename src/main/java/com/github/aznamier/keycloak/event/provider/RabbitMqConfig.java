@@ -3,7 +3,9 @@ package com.github.aznamier.keycloak.event.provider;
 
 import org.jboss.logging.Logger;
 import org.keycloak.Config.Scope;
+import org.keycloak.events.Details;
 import org.keycloak.events.Event;
+import org.keycloak.events.EventType;
 import org.keycloak.events.admin.AdminEvent;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.util.JsonSerialization;
@@ -11,8 +13,11 @@ import org.keycloak.util.JsonSerialization;
 import com.rabbitmq.client.Address;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.regex.Pattern;
 
@@ -65,6 +70,10 @@ public class RabbitMqConfig {
 	private Integer publishBufferMaxMb;
 	private Long shutdownFlushTimeoutMs;
 	private Long confirmTimeoutMs;
+
+	// Essential events: user event types (e.g. REGISTER) and admin events as ADMIN:<RESOURCE>.<OPERATION> (e.g. ADMIN:USER.DELETE)
+	private Set<String> essentialEvents = Collections.emptySet();
+	private Long essentialEventsTimeoutMs;
 	
 	public static String calculateRoutingKey(AdminEvent adminEvent, KeycloakSession session) {
 		//KK.EVENT.ADMIN.<REALM>.<RESULT>.<RESOURCE_TYPE>.<OPERATION>
@@ -158,6 +167,10 @@ public class RabbitMqConfig {
 		cfg.publishBufferMaxMb = (int) number(config, "publish_buffer_max_mb", "100", 1, Integer.MAX_VALUE);
 		cfg.shutdownFlushTimeoutMs = number(config, "shutdown_flush_timeout_ms", "5000", 0, Long.MAX_VALUE);
 		cfg.confirmTimeoutMs = number(config, "confirm_timeout_ms", "5000", 1, Long.MAX_VALUE);
+
+		// Essential events
+		cfg.setEssentialEvents(resolveConfigVar(config, "essential_events", ""));
+		cfg.essentialEventsTimeoutMs = number(config, "essential_events_timeout_ms", "5000", 1, Long.MAX_VALUE);
 		return cfg;
 		
 	}
@@ -401,6 +414,54 @@ public class RabbitMqConfig {
 	}
 	public void setConfirmTimeoutMs(Long confirmTimeoutMs) {
 		this.confirmTimeoutMs = confirmTimeoutMs;
+	}
+	public Set<String> getEssentialEvents() {
+		return essentialEvents;
+	}
+	/**
+	 * @param essentialEvents comma-separated list, e.g. "REGISTER,ADMIN:USER.DELETE"
+	 */
+	public void setEssentialEvents(String essentialEvents) {
+		this.essentialEvents = parseEventNames(essentialEvents);
+	}
+	private static Set<String> parseEventNames(String names) {
+		Set<String> parsed = new LinkedHashSet<>();
+		if (names != null) {
+			for (String name : names.split(",")) {
+				if (!name.trim().isEmpty()) {
+					parsed.add(name.trim().toUpperCase(Locale.ROOT));
+				}
+			}
+		}
+		return Collections.unmodifiableSet(parsed);
+	}
+	public boolean isEssential(Event event) {
+		return !essentialEvents.isEmpty() && event.getError() == null && event.getType() != null
+				&& essentialEvents.contains(event.getType().name()) && !isBrokerRegistration(event);
+	}
+
+	/**
+	 * A REGISTER from a first login through an identity provider is emitted one request after Keycloak created
+	 * and committed the user, so failing that request cannot undo the sign-up; it would only leave the user
+	 * unable to finish it. Such events are published like any other instead.
+	 * (IDENTITY_PROVIDER_FIRST_LOGIN is emitted in the request that creates the user, so it can be enforced.)
+	 */
+	private static boolean isBrokerRegistration(Event event) {
+		return event.getType() == EventType.REGISTER && event.getDetails() != null
+				&& "broker".equals(event.getDetails().get(Details.REGISTER_METHOD));
+	}
+	public boolean isEssential(AdminEvent adminEvent) {
+		return !essentialEvents.isEmpty() && adminEvent.getError() == null && adminEvent.getOperationType() != null
+				&& essentialEvents.contains(adminEventName(adminEvent));
+	}
+	static String adminEventName(AdminEvent adminEvent) {
+		return ("ADMIN:" + adminEvent.getResourceTypeAsString() + "." + adminEvent.getOperationType()).toUpperCase(Locale.ROOT);
+	}
+	public Long getEssentialEventsTimeoutMs() {
+		return essentialEventsTimeoutMs;
+	}
+	public void setEssentialEventsTimeoutMs(Long essentialEventsTimeoutMs) {
+		this.essentialEventsTimeoutMs = essentialEventsTimeoutMs;
 	}
 
 }

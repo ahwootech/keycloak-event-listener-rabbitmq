@@ -134,7 +134,7 @@ class RabbitMqEventListenerProviderTest {
 	}
 
 	private RabbitMqEventListenerProvider provider() {
-		return new RabbitMqEventListenerProvider(new RabbitMqPublisher(connectionManager, cfg), session, cfg);
+		return new RabbitMqEventListenerProvider(new RabbitMqPublisher(connectionManager, cfg), null, session, cfg);
 	}
 
 	/** Completes the request, which publishes its events. */

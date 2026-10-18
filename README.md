@@ -82,6 +82,8 @@ An invalid value, such as a number with extra characters (`5672x`), a number out
   - `KK_TO_RMQ_PUBLISH_BUFFER_MAX_MB` - default: *100*
   - `KK_TO_RMQ_SHUTDOWN_FLUSH_TIMEOUT_MS` - default: *5000*
   - `KK_TO_RMQ_CONFIRM_TIMEOUT_MS` - default: *5000*
+  - `KK_TO_RMQ_ESSENTIAL_EVENTS` - default: *empty*
+  - `KK_TO_RMQ_ESSENTIAL_EVENTS_TIMEOUT_MS` - default: *5000*
 
 ###### TLS
 With `KK_TO_RMQ_USE_TLS=true` the connection uses TLS 1.3 or 1.2, whichever both sides support, and checks RabbitMQ's certificate:
@@ -132,3 +134,17 @@ Every message's `messageId` property is Keycloak's own ID for the event, which i
 When Keycloak tracing is enabled, every message also carries the trace of the request that produced the event, in the `traceparent` header (W3C format, so OpenTelemetry consumers can continue the trace) and as a plain `traceId` header.
   - `KK_TO_RMQ_PERSISTENT_MESSAGES=true` - messages are sent as persistent, so RabbitMQ writes them to disk and they survive a broker restart. Persistence is set on each message by the publisher, not by the queue: a durable queue survives a restart, but a classic queue drops the transient messages in it. It only helps for durable queues; quorum queues and streams persist every message whether or not this is set
   - with `KK_TO_RMQ_PUBLISH_MODE=confirmed` too, an event RabbitMQ has confirmed survives a broker restart or crash, as long as the queue it was routed to is durable
+
+###### Essential events
+Some events must not be lost, e.g. a `REGISTER` that another system builds the user's profile from.
+`KK_TO_RMQ_ESSENTIAL_EVENTS` lists them, comma-separated: user event types (e.g. `REGISTER,UPDATE_EMAIL`) and admin events as
+`ADMIN:<RESOURCE_TYPE>.<OPERATION>` (e.g. `ADMIN:USER.DELETE`). Only successful events are treated as essential.
+
+An essential event is sent before Keycloak commits the request that produced it, and the request waits until RabbitMQ confirms it:
+  - if RabbitMQ does not confirm it within `KK_TO_RMQ_ESSENTIAL_EVENTS_TIMEOUT_MS`, rejects it, no queue is bound to receive it, or RabbitMQ is not connected, the request is rolled back and the user gets an error and can try again. This is logged with the `keycloak-to-rabbitmq PUBLISH FAILED` prefix
+  - essential events are sent on their own channel, are always persistent, and carry Keycloak's event ID as their `messageId`
+  - make sure a queue is bound for every essential event before enabling it, otherwise every such action fails
+  - consumers may rarely receive an essential event for an action that was rolled back (e.g. if the commit itself fails after RabbitMQ confirmed the event), so they should check the current state, e.g. that the user exists
+  - some Keycloak flows commit a change in an earlier request than the one that emits its event, so failing that request cannot undo the change, and consumers should still handle a missing event for those:
+    - a first login through an identity provider creates the user one request before `REGISTER` (with `register_method=broker`) is emitted. Failing it would leave the user unable to finish signing up, so such a `REGISTER` is never treated as essential and is published like any other event. To make these sign-ups fail cleanly while RabbitMQ is unavailable, add `IDENTITY_PROVIDER_FIRST_LOGIN`, which is emitted in the request that creates the user
+    - linking an identity provider through the `idp_link` application initiated action links it one request before `FEDERATED_IDENTITY_LINK` is emitted

@@ -22,10 +22,12 @@ public class RabbitMqEventListenerProviderFactory implements EventListenerProvid
     private ConnectionFactory connectionFactory;
     private RabbitMqConnectionManager connectionManager;
     private RabbitMqPublisher publisher;
+    // Null when no essential events are configured
+    private RabbitMqEssentialPublisher essentialPublisher;
 
     @Override
     public EventListenerProvider create(KeycloakSession session) {
-        return new RabbitMqEventListenerProvider(publisher, session, cfg);
+        return new RabbitMqEventListenerProvider(publisher, essentialPublisher, session, cfg);
     }
 
     @Override
@@ -108,10 +110,17 @@ public class RabbitMqEventListenerProviderFactory implements EventListenerProvid
         this.connectionManager = new RabbitMqConnectionManager(connectionFactory, cfg);
         this.connectionManager.start();
         this.publisher = new RabbitMqPublisher(connectionManager, cfg);
+        if (!cfg.getEssentialEvents().isEmpty()) {
+            this.essentialPublisher = new RabbitMqEssentialPublisher(connectionManager, cfg);
+        }
     }
 
     @Override
     public void close() {
+        // Fails any essential events still waiting, before the connection closes
+        if (essentialPublisher != null) {
+            essentialPublisher.close();
+        }
         // Before the connection closes, so buffered events can still be sent
         if (publisher != null) {
             publisher.close();
