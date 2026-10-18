@@ -86,6 +86,7 @@ A `KK_TO_RMQ_*` environment variable that isn't one of the settings below, e.g. 
   - `KK_TO_RMQ_ESSENTIAL_EVENTS` - default: *empty*
   - `KK_TO_RMQ_ESSENTIAL_EVENTS_TIMEOUT_MS` - default: *5000*
   - `KK_TO_RMQ_EXCLUDED_EVENTS` - default: *empty*
+  - `KK_TO_RMQ_ORDERED_EVENTS` - default: *empty*
 
 ###### TLS
 With `KK_TO_RMQ_USE_TLS=true` the connection uses TLS 1.3 or 1.2, whichever both sides support, and checks RabbitMQ's certificate:
@@ -139,6 +140,18 @@ being lost:
   - a batch that RabbitMQ rejects, or doesn't confirm within `KK_TO_RMQ_CONFIRM_TIMEOUT_MS`, is sent again, one event at a time, so events RabbitMQ accepts aren't held up by one it keeps rejecting
   - consumers may therefore receive an event more than once
   - RabbitMQ confirms an event once it has routed it, or found no queue to route it to; an event no queue is bound for is confirmed and discarded
+
+###### Ordered events
+With `KK_TO_RMQ_PUBLISH_MODE=confirmed`, events normally arrive in the order they happened. The exception is a queue that
+rejects some messages of a batch but accepts later ones, e.g. a queue with a length limit and `x-overflow=reject-publish`
+that is being drained while it is full: the rejected events are sent again, but arrive after events that followed them.
+`KK_TO_RMQ_ORDERED_EVENTS` lists events whose order matters to consumers, using the same syntax and name check as
+essential events (e.g. `UPDATE_EMAIL,ADMIN:USER.UPDATE`):
+  - an ordered event is never in flight together with another ordered event, so ordered events always arrive in order. Other events may still arrive before an earlier ordered event
+  - each ordered event waits for RabbitMQ to confirm everything before it, so this costs one confirm round trip per ordered event; list only events that change state, not frequent ones such as `LOGIN`
+  - it needs `KK_TO_RMQ_PUBLISH_MODE=confirmed`; with another mode, Keycloak doesn't start
+  - essential events are already sent one at a time, in order, so an event can't be both essential and ordered; listing it in both stops Keycloak from starting
+  - each Keycloak instance publishes on its own, so with several instances, the order is only kept among the events of one instance
 
 ###### Messages
 Every message's `messageId` property is Keycloak's own ID for the event, which is also in the message body as `id`, so consumers can detect duplicates and find the event in Keycloak's stored events.

@@ -85,6 +85,8 @@ public class RabbitMqConfig {
 	private Long essentialEventsTimeoutMs;
 	// Excluded events (same syntax as essential events): never published
 	private Set<String> excludedEvents = Collections.emptySet();
+	// Ordered events (same syntax as essential events): never in flight together, so they arrive in order
+	private Set<String> orderedEvents = Collections.emptySet();
 	
 	public static String calculateRoutingKey(AdminEvent adminEvent, KeycloakSession session) {
 		//KK.EVENT.ADMIN.<REALM>.<RESULT>.<RESOURCE_TYPE>.<OPERATION>
@@ -193,6 +195,21 @@ public class RabbitMqConfig {
 					+ String.join(", ", both) + ", which KK_TO_RMQ_ESSENTIAL_EVENTS also lists; an event can't be both");
 		}
 		cfg.essentialEventsTimeoutMs = number(config, "essential_events_timeout_ms", "5000", 1, Long.MAX_VALUE);
+
+		// Ordered events
+		cfg.setOrderedEvents(resolveConfigVar(config, "ordered_events", ""));
+		checkEventNames("ordered_events", cfg.orderedEvents);
+		if (!cfg.orderedEvents.isEmpty() && cfg.publishMode != PublishMode.CONFIRMED) {
+			throw new IllegalArgumentException("keycloak-to-rabbitmq setting ordered_events (KK_TO_RMQ_ORDERED_EVENTS) only works with "
+					+ "KK_TO_RMQ_PUBLISH_MODE=confirmed, which it is not");
+		}
+		Set<String> essentialAndOrdered = new LinkedHashSet<>(cfg.orderedEvents);
+		essentialAndOrdered.retainAll(cfg.essentialEvents);
+		if (!essentialAndOrdered.isEmpty()) {
+			throw new IllegalArgumentException("keycloak-to-rabbitmq setting ordered_events (KK_TO_RMQ_ORDERED_EVENTS) lists "
+					+ String.join(", ", essentialAndOrdered) + ", which KK_TO_RMQ_ESSENTIAL_EVENTS also lists; essential events "
+					+ "are already sent one at a time, in order, so an event can't be both");
+		}
 		for (String name : unknownEnvironmentVariables(System.getenv())) {
 			log.warnf("keycloak-to-rabbitmq %s is set, but it is not a setting of this plugin version, so it is ignored", name);
 		}
@@ -562,6 +579,23 @@ public class RabbitMqConfig {
 	}
 	public boolean isExcluded(AdminEvent adminEvent) {
 		return !excludedEvents.isEmpty() && adminEvent.getOperationType() != null && excludedEvents.contains(adminEventName(adminEvent));
+	}
+
+	public Set<String> getOrderedEvents() {
+		return orderedEvents;
+	}
+	/**
+	 * @param orderedEvents comma-separated list, e.g. "UPDATE_EMAIL,ADMIN:USER.UPDATE"
+	 */
+	public void setOrderedEvents(String orderedEvents) {
+		this.orderedEvents = parseEventNames(orderedEvents);
+	}
+	public boolean isOrdered(Event event) {
+		return !orderedEvents.isEmpty() && event.getType() != null && orderedEvents.contains(event.getType().name());
+	}
+	public boolean isOrdered(AdminEvent adminEvent) {
+		return !orderedEvents.isEmpty() && adminEvent.getOperationType() != null
+				&& orderedEvents.contains(adminEventName(adminEvent));
 	}
 
 }

@@ -342,6 +342,62 @@ class RabbitMqResilienceIT {
 	}
 
 	@Test
+	void orderedEventsKeepTheirOrderWhenAFullQueueRejectsPartOfABatch() throws Exception {
+		// A full queue with reject-publish nacks new messages. Only publisher confirms can see that;
+		// without them RabbitMQ drops the messages and the plugin can't know.
+		testChannel.queueDelete(QUEUE);
+		Map<String, Object> args = new HashMap<>();
+		args.put("x-max-length", 20);
+		args.put("x-overflow", "reject-publish");
+		testChannel.queueDeclare(QUEUE, true, false, false, args);
+		testChannel.queueBind(QUEUE, "amq.topic", "KK.EVENT.#");
+		for (int i = 0; i < 20; i++) {
+			testChannel.basicPublish("", QUEUE, null, "filler".getBytes(StandardCharsets.UTF_8));
+		}
+
+		// All events wait in the buffer while RabbitMQ is unreachable, so they are sent in large batches
+		proxy.disable();
+		settings.put("publish_mode", "confirmed");
+		settings.put("ordered_events", "UPDATE_EMAIL");
+		startPlugin();
+
+		long slowestMs = 0;
+		int count = 100;
+		List<Integer> ordered = new ArrayList<>();
+		for (int seq = 0; seq < count; seq++) {
+			// Every other event, so events that get in ahead of earlier ones are likely to include ordered ones
+			boolean isOrdered = seq % 2 == 1;
+			if (isOrdered) {
+				ordered.add(seq);
+			}
+			slowestMs = Math.max(slowestMs, timedSend(seq, isOrdered ? EventType.UPDATE_EMAIL : EventType.LOGIN));
+		}
+		assertTrue(slowestMs < 200, "a request waited " + slowestMs + " ms on RabbitMQ");
+
+		// A slow link makes a batch take about a second to send, and the full queue is drained steadily meanwhile,
+		// so RabbitMQ accepts part of a batch and rejects the rest. Other events can then get in ahead of
+		// earlier ones; ordered events never do.
+		proxy.toxics().bandwidth("slow", ToxicDirection.UPSTREAM, 50);
+		proxy.enable();
+		List<Integer> firstArrivals = new ArrayList<>();
+		for (int received : receiveAll(count, 20)) {
+			if (!firstArrivals.contains(received)) {
+				firstArrivals.add(received);
+			}
+		}
+		List<Integer> missing = new ArrayList<>();
+		for (int seq = 0; seq < count; seq++) {
+			if (!firstArrivals.contains(seq)) {
+				missing.add(seq);
+			}
+		}
+		assertTrue(missing.isEmpty(), "events were lost: " + missing);
+		List<Integer> orderedArrivals = new ArrayList<>(firstArrivals);
+		orderedArrivals.retainAll(ordered);
+		assertEquals(ordered, orderedArrivals, "ordered events arrived out of order: " + firstArrivals);
+	}
+
+	@Test
 	void backgroundPublishingDoesNotMakeRequestsWaitWhileRabbitMqBlocksPublishers() throws Exception {
 		settings.put("publish_mode", "async");
 		startPlugin();
@@ -586,8 +642,12 @@ class RabbitMqResilienceIT {
 	}
 
 	private long timedSend(int seq) {
+		return timedSend(seq, EventType.LOGIN);
+	}
+
+	private long timedSend(int seq, EventType type) {
 		long start = System.currentTimeMillis();
-		sendEvent(String.valueOf(seq));
+		sendEvent(String.valueOf(seq), type, null);
 		return System.currentTimeMillis() - start;
 	}
 
@@ -596,6 +656,11 @@ class RabbitMqResilienceIT {
 	 * 0 to count - 1 have arrived, or until none arrive for a while (10s, or 2s once the last one has arrived).
 	 */
 	private List<Integer> receiveAll(int count) throws Exception {
+		return receiveAll(count, 0);
+	}
+
+	/** Like {@link #receiveAll(int)}, waiting delayMs after each message, to drain the queue slowly. */
+	private List<Integer> receiveAll(int count, long delayMs) throws Exception {
 		List<Integer> received = new ArrayList<>();
 		Set<Integer> seen = new HashSet<>();
 		while (seen.size() < count) {
@@ -609,6 +674,7 @@ class RabbitMqResilienceIT {
 				seen.add(seq);
 				received.add(seq);
 			}
+			Thread.sleep(delayMs);
 		}
 		return received;
 	}

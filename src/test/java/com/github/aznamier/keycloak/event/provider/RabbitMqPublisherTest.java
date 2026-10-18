@@ -220,6 +220,29 @@ class RabbitMqPublisherTest {
 		assertEquals(Arrays.asList("P0", "C", "P0", "C"), log.subList(0, 4), "the batch is sent again");
 	}
 
+	@Test
+	void confirmsNeverHaveTwoOrderedEventsInFlightTogether() throws Exception {
+		when(channel.waitForConfirms(anyLong())).thenAnswer(i -> {
+			log.add("C");
+			return true;
+		});
+		publisher = new RabbitMqPublisher(manager, cfg(RabbitMqConfig.PublishMode.CONFIRMED, 100));
+
+		// While disconnected the worker holds event 0 as its batch; 1-9 wait in the buffer
+		publisher.publish("KK.EVENT.TEST", props(), body(0));
+		Thread.sleep(300);
+		List<Integer> ordered = Arrays.asList(3, 4, 8);
+		for (int n = 1; n < 10; n++) {
+			publisher.publish("KK.EVENT.TEST", props(), body(n), ordered.contains(n));
+		}
+		connected.set(channel);
+		// Done once the batch holding event 9 is confirmed
+		await(() -> log.contains("P9") && "C".equals(log.get(log.size() - 1)));
+
+		// Each ordered event ends its batch, so the next one is only sent once it is confirmed
+		assertEquals(Arrays.asList("P0", "C", "P1", "P2", "P3", "C", "P4", "C", "P5", "P6", "P7", "P8", "C", "P9", "C"), log);
+	}
+
 	// --- helpers ---
 
 	static RabbitMqConfig cfg(RabbitMqConfig.PublishMode mode, int bufferMb) {
