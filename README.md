@@ -139,6 +139,7 @@ When Keycloak tracing is enabled, every message also carries the trace of the re
 Some events must not be lost, e.g. a `REGISTER` that another system builds the user's profile from.
 `KK_TO_RMQ_ESSENTIAL_EVENTS` lists them, comma-separated: user event types (e.g. `REGISTER,UPDATE_EMAIL`) and admin events as
 `ADMIN:<RESOURCE_TYPE>.<OPERATION>` (e.g. `ADMIN:USER.DELETE`). Only successful events are treated as essential.
+A name that isn't a Keycloak event type or admin operation stops Keycloak from starting with an error naming it, as it would never match; an unknown admin resource type is only a warning, as it may come from an extension.
 
 An essential event is sent before Keycloak commits the request that produced it, and the request waits until RabbitMQ confirms it:
   - if RabbitMQ does not confirm it within `KK_TO_RMQ_ESSENTIAL_EVENTS_TIMEOUT_MS`, rejects it, no queue is bound to receive it, or RabbitMQ is not connected, the request is rolled back and the user gets an error and can try again. This is logged with the `keycloak-to-rabbitmq PUBLISH FAILED` prefix

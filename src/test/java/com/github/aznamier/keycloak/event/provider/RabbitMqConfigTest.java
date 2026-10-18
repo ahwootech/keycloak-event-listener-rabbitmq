@@ -16,6 +16,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.logging.Handler;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
@@ -196,6 +197,31 @@ class RabbitMqConfigTest {
 	void normalizeKeyRemovesSpecialCharactersAndReplacesSpaces() {
 		assertEquals("KK.EVENT.a_b.c-d", RabbitMqConfig.normalizeKey("KK.EVENT.a b.c-d!@$%"));
 		assertEquals("abc", RabbitMqConfig.removeDots("a.b.c"));
+	}
+
+	@Test
+	void knownEventNamesPassTheCheck() {
+		RabbitMqConfig cfg = fromSettings("essential_events", "register, IDENTITY_PROVIDER_FIRST_LOGIN, admin:user.delete, ADMIN:GROUP_MEMBERSHIP.CREATE");
+
+		assertEquals(4, cfg.getEssentialEvents().size());
+	}
+
+	@Test
+	void unknownEventNamesStopStartup() {
+		assertEquals("keycloak-to-rabbitmq setting essential_events (KK_TO_RMQ_ESSENTIAL_EVENTS) lists REGSITER, which is not a Keycloak event type",
+				assertThrows(IllegalArgumentException.class, () -> fromSettings("essential_events", "REGSITER")).getMessage());
+		assertTrue(assertThrows(IllegalArgumentException.class, () -> fromSettings("essential_events", "ADMIN:USER.REMOVE"))
+				.getMessage().contains("REMOVE is not a Keycloak admin operation"));
+		assertTrue(assertThrows(IllegalArgumentException.class, () -> fromSettings("essential_events", "ADMIN:USER"))
+				.getMessage().contains("not of the form ADMIN:<RESOURCE_TYPE>.<OPERATION>"));
+		// Every problem is reported at once
+		assertTrue(assertThrows(IllegalArgumentException.class, () -> fromSettings("essential_events", "REGSITER,LOGOUTT"))
+				.getMessage().contains("LOGOUTT"));
+	}
+
+	@Test
+	void anUnknownAdminResourceTypeIsAllowedAsItMayComeFromAnExtension() {
+		assertEquals(Set.of("ADMIN:MY_EXTENSION_THING.DELETE"), fromSettings("essential_events", "ADMIN:MY_EXTENSION_THING.DELETE").getEssentialEvents());
 	}
 
 	@Test
