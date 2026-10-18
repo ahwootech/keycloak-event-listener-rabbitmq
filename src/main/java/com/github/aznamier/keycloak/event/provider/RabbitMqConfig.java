@@ -20,7 +20,10 @@ import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.regex.Pattern;
 
@@ -40,6 +43,9 @@ public class RabbitMqConfig {
 	private static final Pattern SPECIAL_CHARACTERS = Pattern.compile("[^*#a-zA-Z0-9 _.-]");
 	private static final Pattern SPACE = Pattern.compile(" ");
 	private static final Pattern DOT = Pattern.compile("\\.");
+	private static final String ENV_PREFIX = "KK_TO_RMQ_";
+	// Every setting the plugin reads, so environment variables it doesn't read can be reported
+	private static final Set<String> SETTINGS_READ = ConcurrentHashMap.newKeySet();
 
 	private String hostUrl;
 	private Integer port;
@@ -187,8 +193,25 @@ public class RabbitMqConfig {
 					+ String.join(", ", both) + ", which KK_TO_RMQ_ESSENTIAL_EVENTS also lists; an event can't be both");
 		}
 		cfg.essentialEventsTimeoutMs = number(config, "essential_events_timeout_ms", "5000", 1, Long.MAX_VALUE);
+		for (String name : unknownEnvironmentVariables(System.getenv())) {
+			log.warnf("keycloak-to-rabbitmq %s is set, but it is not a setting of this plugin version, so it is ignored", name);
+		}
 		return cfg;
 		
+	}
+
+	/**
+	 * The KK_TO_RMQ_* environment variables that aren't settings the plugin reads, e.g. a misspelled one or one
+	 * a newer or older version of the plugin uses, which would otherwise be silently ignored.
+	 */
+	static Set<String> unknownEnvironmentVariables(Map<String, String> environment) {
+		Set<String> unknown = new TreeSet<>();
+		for (String name : environment.keySet()) {
+			if (name.startsWith(ENV_PREFIX) && !SETTINGS_READ.contains(name.substring(ENV_PREFIX.length()).toLowerCase(Locale.ENGLISH))) {
+				unknown.add(name);
+			}
+		}
+		return unknown;
 	}
 	
 	/**
@@ -284,6 +307,7 @@ public class RabbitMqConfig {
 
 	private static String resolveConfigVar(Scope config, String variableName, String defaultValue) {
 		
+		SETTINGS_READ.add(variableName);
 		String value = defaultValue;
 		// Keycloak options are usually hyphenated (e.g. --spi-events-listener-keycloak-to-rabbitmq-heartbeat-seconds)
 		String fromKeycloak = config == null ? null
@@ -292,7 +316,7 @@ public class RabbitMqConfig {
 			value = fromKeycloak;
 		} else {
 			//try from env variables eg: KK_TO_RMQ_URL:
-			String envVariableName = "KK_TO_RMQ_" + variableName.toUpperCase(Locale.ENGLISH);
+			String envVariableName = ENV_PREFIX + variableName.toUpperCase(Locale.ENGLISH);
 			String env = System.getenv(envVariableName);
 			if(env != null) {
 				value = env;

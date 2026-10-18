@@ -17,6 +17,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.logging.Handler;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
@@ -160,6 +161,20 @@ class RabbitMqConfigTest {
 		assertThrows(IllegalArgumentException.class, () -> fromSettings("url", "rabbit:70000"));
 		assertThrows(IllegalArgumentException.class, () -> fromSettings("url", " , "));
 		assertThrows(IllegalArgumentException.class, () -> fromSettings("url", "fe80::1"), "IPv6 needs brackets");
+	}
+
+	@Test
+	void environmentVariablesThatAreNotSettingsAreReported() {
+		fromSettings(new HashMap<>());
+		Map<String, String> environment = new HashMap<>();
+		environment.put("KK_TO_RMQ_HEARTBEAT_SECONDS", "10");
+		environment.put("KK_TO_RMQ_HEARTBEAT_SECOND", "10");
+		environment.put("KK_TO_RMQ_ASYNC_PUBLISH", "true");
+		environment.put("KC_SPI_EVENTS_LISTENER_KEYCLOAK_TO_RABBITMQ_URL", "rabbit");
+		environment.put("PATH", "/usr/bin");
+
+		assertEquals(new TreeSet<>(Arrays.asList("KK_TO_RMQ_ASYNC_PUBLISH", "KK_TO_RMQ_HEARTBEAT_SECOND")),
+				RabbitMqConfig.unknownEnvironmentVariables(environment));
 	}
 
 	@Test
