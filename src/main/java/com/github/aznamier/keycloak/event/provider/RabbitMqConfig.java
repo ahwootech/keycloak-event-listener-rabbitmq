@@ -175,8 +175,11 @@ public class RabbitMqConfig {
 	private static String resolveConfigVar(Scope config, String variableName, String defaultValue) {
 		
 		String value = defaultValue;
-		if(config != null && config.get(variableName) != null) {
-			value = config.get(variableName);
+		// Keycloak options are usually hyphenated (e.g. --spi-events-listener-keycloak-to-rabbitmq-heartbeat-seconds)
+		String fromKeycloak = config == null ? null
+				: config.get(variableName) != null ? config.get(variableName) : config.get(variableName.replace('_', '-'));
+		if (fromKeycloak != null) {
+			value = fromKeycloak;
 		} else {
 			//try from env variables eg: KK_TO_RMQ_URL:
 			String envVariableName = "KK_TO_RMQ_" + variableName.toUpperCase(Locale.ENGLISH);

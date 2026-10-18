@@ -30,6 +30,18 @@ class RabbitMqConfigTest {
 	}
 
 	@Test
+	void keycloakOptionsCanUseHyphensOrUnderscores() {
+		Map<String, String> settings = new HashMap<>();
+		settings.put("heartbeat-seconds", "10");
+		settings.put("tls_verify", "false");
+
+		RabbitMqConfig cfg = fromSettings(settings);
+
+		assertEquals(10, cfg.getHeartbeatSeconds());
+		assertFalse(cfg.getTlsVerify());
+	}
+
+	@Test
 	void anInvalidNumberStopsStartupNamingTheSetting() {
 		IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> fromSettings("port", "5672x"));
 
