@@ -72,10 +72,18 @@ class RabbitMqPublisher {
 	}
 
 	void publish(String routingKey, BasicProperties props, byte[] body) {
+		publish(routingKey, props, body, false);
+	}
+
+	/**
+	 * @param ordered in confirmed mode, the event is never in flight together with another ordered event,
+	 *                so ordered events arrive in order even when RabbitMQ rejects part of a batch
+	 */
+	void publish(String routingKey, BasicProperties props, byte[] body, boolean ordered) {
 		if (worker == null) {
 			publishNow(routingKey, props, body);
 		} else {
-			enqueue(new PendingMessage(routingKey, props, body));
+			enqueue(new PendingMessage(routingKey, props, body, ordered));
 		}
 	}
 
@@ -260,10 +268,25 @@ class RabbitMqPublisher {
 	}
 
 	/**
-	 * Adds buffered messages to the batch, up to the batch size.
+	 * Adds buffered messages to the batch, up to the batch size. An ordered message ends the batch, so the next
+	 * one is only sent once RabbitMQ has confirmed it: if RabbitMQ rejects part of a batch (e.g. a full queue
+	 * with overflow=reject-publish), messages after a rejected one can still get in ahead of it when it is resent.
 	 */
 	private void fillBatch(List<PendingMessage> batch) {
-		buffer.drainTo(batch, CONFIRM_BATCH_SIZE - batch.size());
+		if (batch.get(0).ordered) {
+			return;
+		}
+		while (batch.size() < CONFIRM_BATCH_SIZE) {
+			// Only this thread takes from the buffer, so the message peeked is the one polled
+			PendingMessage next = buffer.peek();
+			if (next == null) {
+				return;
+			}
+			batch.add(buffer.poll());
+			if (next.ordered) {
+				return;
+			}
+		}
 	}
 
 	/**
@@ -300,12 +323,14 @@ class RabbitMqPublisher {
 		private final BasicProperties props;
 		private final byte[] body;
 		private final long sizeBytes;
+		private final boolean ordered;
 
-		PendingMessage(String routingKey, BasicProperties props, byte[] body) {
+		PendingMessage(String routingKey, BasicProperties props, byte[] body, boolean ordered) {
 			this.routingKey = routingKey;
 			this.props = props;
 			this.body = body;
 			this.sizeBytes = body.length + 2L * routingKey.length() + MESSAGE_OVERHEAD_BYTES;
+			this.ordered = ordered;
 		}
 	}
 }

@@ -52,6 +52,7 @@ class RabbitMqConfigTest {
 		assertTrue(cfg.getEssentialEvents().isEmpty());
 		assertEquals(5000L, cfg.getEssentialEventsTimeoutMs());
 		assertTrue(cfg.getExcludedEvents().isEmpty());
+		assertTrue(cfg.getOrderedEvents().isEmpty());
 	}
 
 	@Test
@@ -276,6 +277,49 @@ class RabbitMqConfigTest {
 	void unknownExcludedEventNamesStopStartup() {
 		assertEquals("keycloak-to-rabbitmq setting excluded_events (KK_TO_RMQ_EXCLUDED_EVENTS) lists REFRESH_TOKENS, which is not a Keycloak event type",
 				assertThrows(IllegalArgumentException.class, () -> fromSettings("excluded_events", "REFRESH_TOKENS")).getMessage());
+	}
+
+	@Test
+	void listedUserAndAdminEventsAreOrdered() {
+		Map<String, String> settings = new HashMap<>();
+		settings.put("publish_mode", "confirmed");
+		settings.put("ordered_events", " update_email ,ADMIN:USER.UPDATE");
+		RabbitMqConfig cfg = fromSettings(settings);
+
+		assertTrue(cfg.isOrdered(event(EventType.UPDATE_EMAIL, null, null)));
+		assertTrue(cfg.isOrdered(adminEvent("USER", OperationType.UPDATE, null)));
+		assertFalse(cfg.isOrdered(event(EventType.LOGIN, null, null)), "not listed");
+		assertFalse(cfg.isOrdered(adminEvent("USER", OperationType.CREATE, null)));
+	}
+
+	@Test
+	void orderedEventsNeedConfirmedPublishing() {
+		Map<String, String> settings = new HashMap<>();
+		settings.put("publish_mode", "async");
+		settings.put("ordered_events", "UPDATE_EMAIL");
+
+		assertEquals("keycloak-to-rabbitmq setting ordered_events (KK_TO_RMQ_ORDERED_EVENTS) only works with KK_TO_RMQ_PUBLISH_MODE=confirmed, which it is not",
+				assertThrows(IllegalArgumentException.class, () -> fromSettings(settings)).getMessage());
+	}
+
+	@Test
+	void anEventCannotBeBothEssentialAndOrdered() {
+		Map<String, String> settings = new HashMap<>();
+		settings.put("publish_mode", "confirmed");
+		settings.put("essential_events", "REGISTER");
+		settings.put("ordered_events", "REGISTER,UPDATE_EMAIL");
+
+		assertTrue(assertThrows(IllegalArgumentException.class, () -> fromSettings(settings)).getMessage()
+				.startsWith("keycloak-to-rabbitmq setting ordered_events (KK_TO_RMQ_ORDERED_EVENTS) lists REGISTER, which KK_TO_RMQ_ESSENTIAL_EVENTS also lists"));
+	}
+
+	@Test
+	void unknownOrderedEventNamesStopStartup() {
+		Map<String, String> settings = new HashMap<>();
+		settings.put("publish_mode", "confirmed");
+		settings.put("ordered_events", "UPDATE_EMAILS");
+
+		assertTrue(assertThrows(IllegalArgumentException.class, () -> fromSettings(settings)).getMessage().contains("UPDATE_EMAILS"));
 	}
 
 	@Test

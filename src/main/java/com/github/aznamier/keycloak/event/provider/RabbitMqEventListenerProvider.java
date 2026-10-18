@@ -113,7 +113,7 @@ public class RabbitMqEventListenerProvider implements EventListenerProvider {
 		String messageString = RabbitMqConfig.writeAsJson(msg, true);
 		
 		BasicProperties msgProps = this.getMessageProps(EventClientNotificationMqMsg.class.getName(), event.getId());
-		this.publishNotification(messageString, msgProps, routingKey);
+		this.publishNotification(messageString, msgProps, routingKey, cfg.isOrdered(event));
 	}
 	
 	private void publishAdminEvent(AdminEvent adminEvent, boolean includeRepresentation) {
@@ -122,7 +122,7 @@ public class RabbitMqEventListenerProvider implements EventListenerProvider {
 		String messageString = RabbitMqConfig.writeAsJson(msg, true);
 
 		BasicProperties msgProps = this.getMessageProps(EventAdminNotificationMqMsg.class.getName(), adminEvent.getId());
-		this.publishNotification(messageString,msgProps, routingKey);
+		this.publishNotification(messageString,msgProps, routingKey, cfg.isOrdered(adminEvent));
 	}
 	
 	private BasicProperties getMessageProps(String className, String eventId) {
@@ -150,8 +150,8 @@ public class RabbitMqEventListenerProvider implements EventListenerProvider {
 		return propsBuilder.build();
 	}
 
-	private void publishNotification(String messageString, BasicProperties props, String routingKey) {
-		publisher.publish(routingKey, props, messageString.getBytes(StandardCharsets.UTF_8));
+	private void publishNotification(String messageString, BasicProperties props, String routingKey, boolean ordered) {
+		publisher.publish(routingKey, props, messageString.getBytes(StandardCharsets.UTF_8), ordered);
 	}
 
 	private interface EssentialSend {
