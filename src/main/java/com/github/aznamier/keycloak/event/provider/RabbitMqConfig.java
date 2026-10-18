@@ -7,12 +7,15 @@ import org.keycloak.events.Details;
 import org.keycloak.events.Event;
 import org.keycloak.events.EventType;
 import org.keycloak.events.admin.AdminEvent;
+import org.keycloak.events.admin.OperationType;
+import org.keycloak.events.admin.ResourceType;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.util.JsonSerialization;
 
 import com.rabbitmq.client.Address;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -175,6 +178,7 @@ public class RabbitMqConfig {
 
 		// Essential events
 		cfg.setEssentialEvents(resolveConfigVar(config, "essential_events", ""));
+		checkEventNames("essential_events", cfg.essentialEvents);
 		cfg.essentialEventsTimeoutMs = number(config, "essential_events_timeout_ms", "5000", 1, Long.MAX_VALUE);
 		return cfg;
 		
@@ -223,6 +227,47 @@ public class RabbitMqConfig {
 			}
 		}
 		throw invalid("publish_mode", value, "one of sync, async, confirmed");
+	}
+
+	/**
+	 * Stops startup if an event list names something that can never match, e.g. a misspelled event type, which
+	 * would otherwise be silently ignored. User event types and admin operations are fixed by Keycloak; admin
+	 * resource types can also come from extensions, so an unknown one is only a warning.
+	 */
+	static void checkEventNames(String setting, Set<String> names) {
+		String prefix = String.format("keycloak-to-rabbitmq setting %s (KK_TO_RMQ_%s) lists ", setting, setting.toUpperCase(Locale.ENGLISH));
+		List<String> errors = new ArrayList<>();
+		for (String name : names) {
+			if (!name.startsWith("ADMIN:")) {
+				if (!isEnumConstant(EventType.class, name)) {
+					errors.add(prefix + name + ", which is not a Keycloak event type");
+				}
+				continue;
+			}
+			String adminEvent = name.substring("ADMIN:".length());
+			int dot = adminEvent.lastIndexOf('.');
+			if (dot <= 0) {
+				errors.add(prefix + name + ", which is not of the form ADMIN:<RESOURCE_TYPE>.<OPERATION>");
+			} else if (!isEnumConstant(OperationType.class, adminEvent.substring(dot + 1))) {
+				errors.add(prefix + name + ", but " + adminEvent.substring(dot + 1) + " is not a Keycloak admin operation, one of "
+						+ Arrays.toString(OperationType.values()));
+			} else if (!isEnumConstant(ResourceType.class, adminEvent.substring(0, dot))) {
+				log.warnf("%s%s, but %s is not a built-in Keycloak admin resource type, so it only matches one from an extension",
+						prefix, name, adminEvent.substring(0, dot));
+			}
+		}
+		if (!errors.isEmpty()) {
+			throw new IllegalArgumentException(String.join("; ", errors));
+		}
+	}
+
+	private static <E extends Enum<E>> boolean isEnumConstant(Class<E> type, String name) {
+		try {
+			Enum.valueOf(type, name);
+			return true;
+		} catch (IllegalArgumentException e) {
+			return false;
+		}
 	}
 
 	private static IllegalArgumentException invalid(String name, String value, String expected) {
