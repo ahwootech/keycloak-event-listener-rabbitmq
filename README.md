@@ -84,6 +84,7 @@ An invalid value, such as a number with extra characters (`5672x`), a number out
   - `KK_TO_RMQ_CONFIRM_TIMEOUT_MS` - default: *5000*
   - `KK_TO_RMQ_ESSENTIAL_EVENTS` - default: *empty*
   - `KK_TO_RMQ_ESSENTIAL_EVENTS_TIMEOUT_MS` - default: *5000*
+  - `KK_TO_RMQ_EXCLUDED_EVENTS` - default: *empty*
 
 ###### TLS
 With `KK_TO_RMQ_USE_TLS=true` the connection uses TLS 1.3 or 1.2, whichever both sides support, and checks RabbitMQ's certificate:
@@ -158,3 +159,11 @@ An essential event is sent before Keycloak commits the request that produced it,
   - some Keycloak flows commit a change in an earlier request than the one that emits its event, so failing that request cannot undo the change, and consumers should still handle a missing event for those:
     - a first login through an identity provider creates the user one request before `REGISTER` (with `register_method=broker`) is emitted. Failing it would leave the user unable to finish signing up, so such a `REGISTER` is never treated as essential and is published like any other event. To make these sign-ups fail cleanly while RabbitMQ is unavailable, add `IDENTITY_PROVIDER_FIRST_LOGIN`, which is emitted in the request that creates the user
     - linking an identity provider through the `idp_link` application initiated action links it one request before `FEDERATED_IDENTITY_LINK` is emitted
+
+###### Excluded events
+`KK_TO_RMQ_EXCLUDED_EVENTS` lists events that are never published, using the same syntax and name check as essential events
+(e.g. `REFRESH_TOKEN,CODE_TO_TOKEN`). Very frequent token events can make up most of Keycloak's events, so excluding the
+ones no consumer needs reduces the load on Keycloak, RabbitMQ and consumers:
+  - excluded events are skipped before anything else is done with them
+  - error events have their own type, so excluding `REFRESH_TOKEN` still publishes `REFRESH_TOKEN_ERROR`
+  - an event can't be both essential and excluded: listing it in both stops Keycloak from starting with an error naming it
