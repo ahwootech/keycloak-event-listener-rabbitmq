@@ -195,9 +195,9 @@ public class RabbitMqConfig {
 				value = env;
 			}
 		}
-		if (!"password".equals(variableName)) {
-			log.infof("keycloak-to-rabbitmq configuration: %s=%s%n", variableName, value);
-		}
+		// Secrets (password, key_store_pass, trust_store_pass) only show whether they are set
+		String logged = variableName.contains("pass") && !value.isEmpty() ? "<hidden>" : value;
+		log.infof("keycloak-to-rabbitmq configuration: %s=%s%n", variableName, logged);
 		return value;
 		
 	}

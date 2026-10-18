@@ -10,8 +10,14 @@ import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
+import java.util.logging.SimpleFormatter;
 
 import org.junit.jupiter.api.Test;
 import org.keycloak.Config.Scope;
@@ -46,6 +52,42 @@ class RabbitMqConfigTest {
 
 		assertEquals(10, cfg.getHeartbeatSeconds());
 		assertFalse(cfg.getTlsVerify());
+	}
+
+	@Test
+	void secretsAreNotLogged() {
+		Map<String, String> settings = new HashMap<>();
+		settings.put("password", "rabbit-secret");
+		settings.put("key_store_pass", "key-secret");
+		settings.put("trust_store_pass", "");
+		List<String> lines = new ArrayList<>();
+		Handler handler = new Handler() {
+			@Override
+			public void publish(LogRecord record) {
+				lines.add(new SimpleFormatter().formatMessage(record).trim());
+			}
+
+			@Override
+			public void flush() {
+			}
+
+			@Override
+			public void close() {
+			}
+		};
+		Logger logger = Logger.getLogger(RabbitMqConfig.class.getName());
+		logger.addHandler(handler);
+		try {
+			RabbitMqConfig cfg = fromSettings(settings);
+			assertEquals("key-secret", cfg.getKeytStorePass());
+		} finally {
+			logger.removeHandler(handler);
+		}
+
+		assertFalse(lines.stream().anyMatch(l -> l.contains("secret")), String.join("\n", lines));
+		assertTrue(lines.contains("keycloak-to-rabbitmq configuration: password=<hidden>"), String.join("\n", lines));
+		assertTrue(lines.contains("keycloak-to-rabbitmq configuration: key_store_pass=<hidden>"));
+		assertTrue(lines.contains("keycloak-to-rabbitmq configuration: trust_store_pass="), "an empty secret shows as not set");
 	}
 
 	@Test
