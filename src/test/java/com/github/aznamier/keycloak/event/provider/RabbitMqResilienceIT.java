@@ -479,6 +479,21 @@ class RabbitMqResilienceIT {
 		sendEssentialEvent("disconnected").assertRolledBackWithin(200, "not connected to RabbitMQ");
 	}
 
+	@Test
+	void excludedEventsAreNeverPublished() throws Exception {
+		settings.put("excluded_events", "REFRESH_TOKEN");
+		startPlugin();
+		RabbitMqConnectionManager manager = manager();
+		await(() -> manager.getChannel() != null);
+
+		sendEvent("refresh", EventType.REFRESH_TOKEN, null);
+		sendEvent("login", EventType.LOGIN, null);
+
+		assertTrue(new String(awaitMessage().getBody(), StandardCharsets.UTF_8).contains("\"userId\" : \"login\""));
+		Thread.sleep(1000);
+		assertNull(testChannel.basicGet(QUEUE, true), "the excluded event was published");
+	}
+
 	private void startPlugin() {
 		Scope scope = mock(Scope.class);
 		when(scope.get(anyString())).thenAnswer(i -> settings.get(i.<String>getArgument(0)));

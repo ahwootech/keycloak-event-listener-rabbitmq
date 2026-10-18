@@ -52,6 +52,9 @@ public class RabbitMqEventListenerProvider implements EventListenerProvider {
 
 	@Override
 	public void onEvent(Event event) {
+		if (cfg.isExcluded(event)) {
+			return;
+		}
 		if (cfg.isEssential(event) && enlistEssential()) {
 			Event copy = event.clone();
 			essentialTx.add(() -> sendEssential(RabbitMqConfig.calculateRoutingKey(copy, session),
@@ -63,6 +66,9 @@ public class RabbitMqEventListenerProvider implements EventListenerProvider {
 
 	@Override
 	public void onEvent(AdminEvent adminEvent, boolean includeRepresentation) {
+		if (cfg.isExcluded(adminEvent)) {
+			return;
+		}
 		if (cfg.isEssential(adminEvent) && enlistEssential()) {
 			essentialTx.add(() -> sendEssential(RabbitMqConfig.calculateRoutingKey(adminEvent, session),
 					EventAdminNotificationMqMsg.create(adminEvent), adminEvent.getId(), EventAdminNotificationMqMsg.class.getName()));

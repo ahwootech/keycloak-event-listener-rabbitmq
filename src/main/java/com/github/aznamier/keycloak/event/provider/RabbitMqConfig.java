@@ -77,6 +77,8 @@ public class RabbitMqConfig {
 	// Essential events: user event types (e.g. REGISTER) and admin events as ADMIN:<RESOURCE>.<OPERATION> (e.g. ADMIN:USER.DELETE)
 	private Set<String> essentialEvents = Collections.emptySet();
 	private Long essentialEventsTimeoutMs;
+	// Excluded events (same syntax as essential events): never published
+	private Set<String> excludedEvents = Collections.emptySet();
 	
 	public static String calculateRoutingKey(AdminEvent adminEvent, KeycloakSession session) {
 		//KK.EVENT.ADMIN.<REALM>.<RESULT>.<RESOURCE_TYPE>.<OPERATION>
@@ -174,6 +176,16 @@ public class RabbitMqConfig {
 		// Essential events
 		cfg.setEssentialEvents(resolveConfigVar(config, "essential_events", ""));
 		checkEventNames("essential_events", cfg.essentialEvents);
+
+		// Excluded events
+		cfg.setExcludedEvents(resolveConfigVar(config, "excluded_events", ""));
+		checkEventNames("excluded_events", cfg.excludedEvents);
+		Set<String> both = new LinkedHashSet<>(cfg.excludedEvents);
+		both.retainAll(cfg.essentialEvents);
+		if (!both.isEmpty()) {
+			throw new IllegalArgumentException("keycloak-to-rabbitmq setting excluded_events (KK_TO_RMQ_EXCLUDED_EVENTS) lists "
+					+ String.join(", ", both) + ", which KK_TO_RMQ_ESSENTIAL_EVENTS also lists; an event can't be both");
+		}
 		cfg.essentialEventsTimeoutMs = number(config, "essential_events_timeout_ms", "5000", 1, Long.MAX_VALUE);
 		return cfg;
 		
@@ -507,6 +519,25 @@ public class RabbitMqConfig {
 	}
 	public void setEssentialEventsTimeoutMs(Long essentialEventsTimeoutMs) {
 		this.essentialEventsTimeoutMs = essentialEventsTimeoutMs;
+	}
+
+	public Set<String> getExcludedEvents() {
+		return excludedEvents;
+	}
+	/**
+	 * @param excludedEvents comma-separated list, e.g. "REFRESH_TOKEN,CODE_TO_TOKEN"
+	 */
+	public void setExcludedEvents(String excludedEvents) {
+		this.excludedEvents = parseEventNames(excludedEvents);
+	}
+	/**
+	 * Whether the event is not published at all.
+	 */
+	public boolean isExcluded(Event event) {
+		return !excludedEvents.isEmpty() && event.getType() != null && excludedEvents.contains(event.getType().name());
+	}
+	public boolean isExcluded(AdminEvent adminEvent) {
+		return !excludedEvents.isEmpty() && adminEvent.getOperationType() != null && excludedEvents.contains(adminEventName(adminEvent));
 	}
 
 }
