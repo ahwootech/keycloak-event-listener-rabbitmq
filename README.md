@@ -105,6 +105,13 @@ Java client's own:
   - `KK_TO_RMQ_CONNECTION_TIMEOUT_MS` - how long a connection attempt waits for the TCP connection, and again for RabbitMQ to respond once it is open (e.g. when the broker is frozen or behind a proxy). Against an unreachable or frozen broker every attempt waits this long, so lower values reconnect sooner once RabbitMQ is back, e.g. *5000*. When not set, the client's defaults are used: 60000 for the TCP connection and 10000 for the response
   - `KK_TO_RMQ_NETWORK_RECOVERY_INTERVAL_MS` - how long to wait between reconnect attempts, both for the first connection at startup and after a connection drops
 
+Connection problems are logged at ERROR level with the prefix `keycloak-to-rabbitmq CONNECTION PROBLEM` as soon as
+they happen, whether or not any events are being sent, so they can be used for alerting:
+  - the connection being lost, with the reason (e.g. missed heartbeats, or RabbitMQ closing it)
+  - failing to connect at startup, with the error; while the connection stays down, a summary at most once a minute with how long it has been down and how many reconnect attempts failed
+  - RabbitMQ blocking publishers (e.g. when it is low on memory or disk), with its reason. RabbitMQ only tells a connection it is blocked when it publishes during the alarm, so this is logged at the first event sent while it lasts
+  - connecting or reconnecting (`reconnected to RabbitMQ at <host>:<port> after <duration> and <n> failed attempts`) and RabbitMQ unblocking publishers are logged at INFO
+
 ###### Background publishing
 `KK_TO_RMQ_PUBLISH_MODE` sets how events are sent:
   - `sync` (the default) - on the Keycloak request thread, once the request's transaction completes

@@ -27,6 +27,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
+import java.util.logging.SimpleFormatter;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -96,9 +100,29 @@ class RabbitMqResilienceIT {
 	private Channel testChannel;
 	private final Map<String, String> settings = new HashMap<>();
 	private RabbitMqEventListenerProviderFactory factory;
+	// The connection manager's log lines
+	private final List<String> logLines = Collections.synchronizedList(new ArrayList<>());
+	private final Logger managerLogger = Logger.getLogger(RabbitMqConnectionManager.class.getName());
+	private final Handler logHandler = new Handler() {
+		private final SimpleFormatter formatter = new SimpleFormatter();
+
+		@Override
+		public void publish(LogRecord record) {
+			logLines.add(formatter.formatMessage(record));
+		}
+
+		@Override
+		public void flush() {
+		}
+
+		@Override
+		public void close() {
+		}
+	};
 
 	@BeforeEach
 	void setUp() throws Exception {
+		managerLogger.addHandler(logHandler);
 		ToxiproxyClient client = new ToxiproxyClient(toxiproxy.getHost(), toxiproxy.getControlPort());
 		Proxy existing = client.getProxyOrNull("rabbitmq");
 		if (existing != null) {
@@ -134,6 +158,7 @@ class RabbitMqResilienceIT {
 			factory.close();
 		}
 		testConnection.close();
+		managerLogger.removeHandler(logHandler);
 	}
 
 	@Test
@@ -361,6 +386,44 @@ class RabbitMqResilienceIT {
 	}
 
 	@Test
+	void connectionLossFailedReconnectsAndRecoveryAreLogged() throws Exception {
+		startPlugin();
+		RabbitMqConnectionManager manager = manager();
+		await(() -> manager.getChannel() != null);
+		// Report the outage every half second instead of every minute
+		manager.stillDownReportIntervalMs = 500;
+
+		// A dead host: nothing is published, so only the connection itself shows the outage (missed heartbeats)
+		blackHole();
+		awaitLog("keycloak-to-rabbitmq CONNECTION PROBLEM: connection to RabbitMQ at " + address()
+				+ " lost, reconnecting every 200 ms: com.rabbitmq.client.MissedHeartbeatException");
+		awaitLog("keycloak-to-rabbitmq CONNECTION PROBLEM: still not connected to RabbitMQ at " + address() + " after ");
+
+		restore();
+		awaitLog("keycloak-to-rabbitmq reconnected to RabbitMQ at " + address() + " after ");
+	}
+
+	@Test
+	void rabbitMqBlockingPublishersIsLogged() throws Exception {
+		startPlugin();
+		RabbitMqConnectionManager manager = manager();
+		await(() -> manager.getChannel() != null);
+		String watermark = memoryWatermark();
+
+		// A memory alarm: RabbitMQ stays connected but stops accepting messages from publishers.
+		// It only tells a connection it is blocked once that connection publishes during the alarm.
+		try {
+			rabbitmqctl("set_vm_memory_high_watermark", "absolute", "1MB");
+			await(() -> alarmsRaised().contains("Memory alarm"));
+			sendEvent("during-alarm");
+			awaitLog("keycloak-to-rabbitmq CONNECTION PROBLEM: RabbitMQ at " + address() + " is blocking publishers: ");
+		} finally {
+			rabbitmqctl("set_vm_memory_high_watermark", watermark);
+		}
+		awaitLog("keycloak-to-rabbitmq RabbitMQ at " + address() + " unblocked publishers after ");
+	}
+
+	@Test
 	void confirmedEssentialEventsLetTheRequestCommit() throws Exception {
 		startEssentialPlugin();
 
@@ -580,6 +643,26 @@ class RabbitMqResilienceIT {
 			return null;
 		} catch (ReflectiveOperationException e) {
 			throw new IllegalStateException(e);
+		}
+	}
+
+	private String address() {
+		return toxiproxy.getHost() + ":" + toxiproxy.getMappedPort(PROXY_PORT);
+	}
+
+	/** Waits for a log line from the connection manager that starts with the given text. */
+	private void awaitLog(String start) throws InterruptedException {
+		long deadline = System.currentTimeMillis() + 30_000;
+		while (true) {
+			synchronized (logLines) {
+				if (logLines.stream().anyMatch(l -> l.startsWith(start))) {
+					return;
+				}
+			}
+			if (System.currentTimeMillis() > deadline) {
+				throw new AssertionError("no log line starting with:\n  " + start + "\nlogged:\n  " + String.join("\n  ", logLines));
+			}
+			Thread.sleep(50);
 		}
 	}
 
