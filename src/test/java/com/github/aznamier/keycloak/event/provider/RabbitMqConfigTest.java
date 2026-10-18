@@ -19,7 +19,7 @@ class RabbitMqConfigTest {
 
 	@Test
 	void defaults() {
-		RabbitMqConfig cfg = RabbitMqConfig.createFromScope(null);
+		RabbitMqConfig cfg = fromSettings(new HashMap<>());
 
 		assertEquals(5672, cfg.getPort());
 		assertFalse(cfg.getUseTls());
@@ -58,6 +58,18 @@ class RabbitMqConfigTest {
 	}
 
 	@Test
+	void aMissingVhostStopsStartup() {
+		Map<String, String> settings = new HashMap<>();
+		settings.put("vhost", null);
+		IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> fromSettings(settings));
+
+		assertEquals("keycloak-to-rabbitmq setting vhost (KK_TO_RMQ_VHOST) must be set, e.g. to / for RabbitMQ's default virtual host, got ''",
+				e.getMessage());
+		assertThrows(IllegalArgumentException.class, () -> fromSettings("vhost", " "));
+		assertEquals("keycloak-events", fromSettings("vhost", "keycloak-events").getVhost());
+	}
+
+	@Test
 	void surroundingSpacesAndCapitalsAreAccepted() {
 		assertEquals(5673, fromSettings("port", " 5673 ").getPort());
 		assertTrue(fromSettings("use_tls", " TRUE ").getUseTls());
@@ -66,8 +78,17 @@ class RabbitMqConfigTest {
 	private static RabbitMqConfig fromSettings(String name, String value) {
 		Map<String, String> settings = new HashMap<>();
 		settings.put(name, value);
+		return fromSettings(settings);
+	}
+
+	/** The plugin's configuration from these Keycloak options, with vhost "/" unless they set it (even to null). */
+	private static RabbitMqConfig fromSettings(Map<String, String> settings) {
+		Map<String, String> withVhost = new HashMap<>(settings);
+		if (!settings.containsKey("vhost")) {
+			withVhost.put("vhost", "/");
+		}
 		Scope scope = mock(Scope.class);
-		when(scope.get(anyString())).thenAnswer(i -> settings.get(i.<String>getArgument(0)));
+		when(scope.get(anyString())).thenAnswer(i -> withVhost.get(i.<String>getArgument(0)));
 		return RabbitMqConfig.createFromScope(scope);
 	}
 }

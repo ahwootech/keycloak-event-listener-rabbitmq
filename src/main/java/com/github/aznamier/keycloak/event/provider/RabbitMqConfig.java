@@ -104,7 +104,12 @@ public class RabbitMqConfig {
 		cfg.port = (int) number(config, "port", "5672", 1, 65535);
 		cfg.username = resolveConfigVar(config, "username", "admin");
 		cfg.password = resolveConfigVar(config, "password", "admin");
+		// Required: RabbitMQ rejects an empty name, and a default of "/" would silently send events to the wrong
+		// virtual host, where nothing may be bound to receive them, when another one was meant but not set
 		cfg.vhost = resolveConfigVar(config, "vhost", "");
+		if (cfg.vhost.trim().isEmpty()) {
+			throw invalid("vhost", cfg.vhost, "set, e.g. to / for RabbitMQ's default virtual host");
+		}
 		cfg.useTls = flag(config, "use_tls", "false");
 		cfg.tlsVerify = flag(config, "tls_verify", "true");
 
