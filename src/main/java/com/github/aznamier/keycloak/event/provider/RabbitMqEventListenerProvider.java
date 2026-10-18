@@ -27,7 +27,8 @@ public class RabbitMqEventListenerProvider implements EventListenerProvider {
 
 	private final EventListenerTransaction tx = new EventListenerTransaction(this::publishAdminEvent, this::publishEvent);
 
-	public RabbitMqEventListenerProvider(RabbitMqConnectionManager connectionManager, KeycloakSession session, RabbitMqConfig cfg) {
+	// Created only by RabbitMqEventListenerProviderFactory; not part of the plugin's API, so it can change in any release
+	RabbitMqEventListenerProvider(RabbitMqConnectionManager connectionManager, KeycloakSession session, RabbitMqConfig cfg) {
 		this.cfg = cfg;
 		this.connectionManager = connectionManager;
 		this.session = session;

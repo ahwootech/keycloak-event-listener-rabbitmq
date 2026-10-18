@@ -19,8 +19,10 @@ import com.rabbitmq.client.ConnectionFactory;
  * Connecting only ever happens on a background thread, so Keycloak requests never wait on the broker.
  * The first connection is opened at startup and retried until it succeeds; after that, the client's
  * automatic recovery reconnects the same connection and channel after a drop.
+ *
+ * Internal to the plugin, so it can change in any release.
  */
-public class RabbitMqConnectionManager {
+class RabbitMqConnectionManager {
 
 	private static final Logger log = Logger.getLogger(RabbitMqConnectionManager.class);
 
@@ -41,12 +43,12 @@ public class RabbitMqConnectionManager {
 	// Only used on the connect thread
 	private int failedAttempts;
 
-	public RabbitMqConnectionManager(ConnectionFactory connectionFactory, RabbitMqConfig cfg) {
+	RabbitMqConnectionManager(ConnectionFactory connectionFactory, RabbitMqConfig cfg) {
 		this.connectionFactory = connectionFactory;
 		this.cfg = cfg;
 	}
 
-	public void start() {
+	void start() {
 		scheduleConnect(0);
 	}
 
@@ -54,7 +56,7 @@ public class RabbitMqConnectionManager {
 	 * Returns the open channel, or null if there is none right now. Never blocks: if the channel
 	 * is missing it schedules a background attempt to open it.
 	 */
-	public Channel getChannel() {
+	Channel getChannel() {
 		Channel ch = channel;
 		if (ch != null && ch.isOpen()) {
 			return ch;
@@ -63,7 +65,7 @@ public class RabbitMqConnectionManager {
 		return null;
 	}
 
-	public void close() {
+	void close() {
 		closed = true;
 		executor.shutdownNow();
 		Connection conn = connection;
