@@ -1,6 +1,8 @@
 package com.github.aznamier.keycloak.event.provider;
 
 import java.io.IOException;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -19,6 +21,9 @@ import com.rabbitmq.client.ConnectionFactory;
  * Connecting only ever happens on a background thread, so Keycloak requests never wait on the broker.
  * The first connection is opened at startup and retried until it succeeds; after that, the client's
  * automatic recovery reconnects the same connection and channel after a drop.
+ *
+ * When essential events are configured, a second channel in confirm mode is kept for them, so they are
+ * never held up by (or confused with) messages published on the other channel.
  *
  * Internal to the plugin, so it can change in any release.
  */
@@ -39,6 +44,9 @@ class RabbitMqConnectionManager {
 
 	private volatile Connection connection;
 	private volatile Channel channel;
+	private volatile Channel essentialChannel;
+	// messageIds of mandatory messages RabbitMQ returned as unroutable on the essential channel
+	private final Set<String> returnedMessageIds = ConcurrentHashMap.newKeySet();
 	private volatile boolean closed;
 	// Only used on the connect thread
 	private int failedAttempts;
@@ -63,6 +71,25 @@ class RabbitMqConnectionManager {
 		}
 		scheduleConnect(0);
 		return null;
+	}
+
+	/**
+	 * Like {@link #getChannel()}, for the essential events channel (in confirm mode).
+	 */
+	Channel getEssentialChannel() {
+		Channel ch = essentialChannel;
+		if (ch != null && ch.isOpen()) {
+			return ch;
+		}
+		scheduleConnect(0);
+		return null;
+	}
+
+	/**
+	 * Returns true, once, if RabbitMQ returned the mandatory message with this messageId as unroutable.
+	 */
+	boolean consumeReturned(String messageId) {
+		return messageId != null && returnedMessageIds.remove(messageId);
 	}
 
 	void close() {
@@ -125,6 +152,21 @@ class RabbitMqConnectionManager {
 					ch.confirmSelect();
 				}
 				channel = ch;
+			}
+			if (!cfg.getEssentialEvents().isEmpty()) {
+				Channel ech = essentialChannel;
+				if (ech == null || !ech.isOpen()) {
+					ech = conn.createChannel();
+					// Automatic recovery restores confirm mode and the return listener on the recovered channel
+					ech.confirmSelect();
+					ech.addReturnListener(r -> {
+						String messageId = r.getProperties() != null ? r.getProperties().getMessageId() : null;
+						if (messageId != null) {
+							returnedMessageIds.add(messageId);
+						}
+					});
+					essentialChannel = ech;
+				}
 			}
 		} catch (IOException | TimeoutException e) {
 			long retryMs = connectionFactory.getNetworkRecoveryInterval();

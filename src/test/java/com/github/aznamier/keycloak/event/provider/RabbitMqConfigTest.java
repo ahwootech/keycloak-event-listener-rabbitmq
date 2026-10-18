@@ -11,7 +11,9 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.logging.Handler;
@@ -45,6 +47,8 @@ class RabbitMqConfigTest {
 		assertEquals(5000L, cfg.getShutdownFlushTimeoutMs());
 		assertEquals(5000L, cfg.getConfirmTimeoutMs());
 		assertFalse(cfg.getPersistentMessages());
+		assertTrue(cfg.getEssentialEvents().isEmpty());
+		assertEquals(5000L, cfg.getEssentialEventsTimeoutMs());
 	}
 
 	@Test
@@ -204,6 +208,53 @@ class RabbitMqConfigTest {
 		assertEquals("abc", RabbitMqConfig.removeDots("a.b.c"));
 	}
 
+	@Test
+	void essentialEventsAreParsedIgnoringCaseSpacesAndEmptyEntries() {
+		RabbitMqConfig cfg = new RabbitMqConfig();
+		cfg.setEssentialEvents(" register , admin:user.delete,,UPDATE_EMAIL ");
+
+		assertEquals(new HashSet<>(Arrays.asList("REGISTER", "ADMIN:USER.DELETE", "UPDATE_EMAIL")), cfg.getEssentialEvents());
+	}
+
+	@Test
+	void emptyEssentialEventsMatchNothing() {
+		RabbitMqConfig cfg = new RabbitMqConfig();
+		cfg.setEssentialEvents("");
+
+		assertTrue(cfg.getEssentialEvents().isEmpty());
+		assertFalse(cfg.isEssential(event(EventType.REGISTER, null, null)));
+	}
+
+	@Test
+	void listedSuccessfulUserEventsAreEssential() {
+		RabbitMqConfig cfg = essential("REGISTER,UPDATE_EMAIL");
+
+		assertTrue(cfg.isEssential(event(EventType.REGISTER, null, "form")));
+		assertTrue(cfg.isEssential(event(EventType.UPDATE_EMAIL, null, null)));
+		assertFalse(cfg.isEssential(event(EventType.LOGIN, null, null)), "not listed");
+		assertFalse(cfg.isEssential(event(EventType.REGISTER, "invalid_registration", "form")), "failed events are never essential");
+	}
+
+	@Test
+	void registerFromAnIdentityProviderIsNeverEssential() {
+		RabbitMqConfig cfg = essential("REGISTER,IDENTITY_PROVIDER_FIRST_LOGIN");
+
+		assertFalse(cfg.isEssential(event(EventType.REGISTER, null, "broker")));
+		assertTrue(cfg.isEssential(event(EventType.REGISTER, null, "form")));
+		assertTrue(cfg.isEssential(event(EventType.REGISTER, null, "token-exchange")));
+		assertTrue(cfg.isEssential(event(EventType.IDENTITY_PROVIDER_FIRST_LOGIN, null, null)));
+	}
+
+	@Test
+	void adminEventsMatchOnResourceTypeAndOperation() {
+		RabbitMqConfig cfg = essential("ADMIN:USER.DELETE");
+
+		assertTrue(cfg.isEssential(adminEvent("USER", OperationType.DELETE, null)));
+		assertFalse(cfg.isEssential(adminEvent("USER", OperationType.CREATE, null)));
+		assertFalse(cfg.isEssential(adminEvent("CLIENT", OperationType.DELETE, null)));
+		assertFalse(cfg.isEssential(adminEvent("USER", OperationType.DELETE, "some error")), "failed events are never essential");
+	}
+
 	private static RabbitMqConfig fromSettings(String name, String value) {
 		Map<String, String> settings = new HashMap<>();
 		settings.put(name, value);
@@ -222,6 +273,12 @@ class RabbitMqConfigTest {
 		Scope scope = mock(Scope.class);
 		when(scope.get(anyString())).thenAnswer(i -> withVhost.get(i.<String>getArgument(0)));
 		return RabbitMqConfig.createFromScope(scope);
+	}
+
+	private static RabbitMqConfig essential(String list) {
+		RabbitMqConfig cfg = new RabbitMqConfig();
+		cfg.setEssentialEvents(list);
+		return cfg;
 	}
 
 	private static Event event(EventType type, String error, String registerMethod) {
