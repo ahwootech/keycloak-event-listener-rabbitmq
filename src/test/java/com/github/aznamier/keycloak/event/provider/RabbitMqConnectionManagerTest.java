@@ -15,6 +15,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.function.BooleanSupplier;
 import java.util.logging.Handler;
+import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 import java.util.logging.SimpleFormatter;
@@ -34,6 +35,7 @@ import com.rabbitmq.client.Recoverable;
 import com.rabbitmq.client.RecoveryListener;
 import com.rabbitmq.client.ShutdownListener;
 import com.rabbitmq.client.ShutdownSignalException;
+import com.rabbitmq.client.impl.DefaultExceptionHandler;
 
 class RabbitMqConnectionManagerTest {
 
@@ -152,6 +154,53 @@ class RabbitMqConnectionManagerTest {
 		assertEquals(1, problems().size(), "the first failure only: " + logLines);
 		assertLogged("ERROR " + PROBLEM + ": could not connect to RabbitMQ at rabbit:5672, retrying every 10 ms");
 		assertLogged("INFO keycloak-to-rabbitmq connected to RabbitMQ at rabbit:5672 after 0 s and 2 failed attempts");
+	}
+
+	@Test
+	void theClientsConnectionDriverErrorsAreOnlyLoggedForDebugging() throws Exception {
+		Level level = logger.getLevel();
+		logger.setLevel(Level.ALL);
+		try {
+			exceptionHandler().handleUnexpectedConnectionDriverException(connection, new IOException("Socket closed"));
+		} finally {
+			logger.setLevel(level);
+		}
+
+		assertLogged("DEBUG keycloak-to-rabbitmq connection driver error on RabbitMQ at rabbit:5672");
+		assertEquals(1, logLines.size(), String.valueOf(logLines));
+	}
+
+	@Test
+	void theClientDoesNotAlsoLogConnectionDriverErrors() {
+		List<String> clientLines = Collections.synchronizedList(new ArrayList<>());
+		// The client logs through SLF4J, which Keycloak's JBoss LogManager binding receives
+		Logger clientLogger = org.jboss.logmanager.Logger.getLogger("com.rabbitmq");
+		Handler clientHandler = new Handler() {
+			@Override
+			public void publish(LogRecord record) {
+				clientLines.add(record.getLevel().getName() + " " + record.getMessage());
+			}
+
+			@Override
+			public void flush() {
+			}
+
+			@Override
+			public void close() {
+			}
+		};
+		clientLogger.addHandler(clientHandler);
+		try {
+			// The client's own handler logs the error, so the capture works
+			new DefaultExceptionHandler().handleUnexpectedConnectionDriverException(connection, new IOException("Socket closed"));
+			assertEquals(1, clientLines.size(), "the client's default handler should log it: " + clientLines);
+
+			clientLines.clear();
+			exceptionHandler().handleUnexpectedConnectionDriverException(connection, new IOException("Socket closed"));
+			assertTrue(clientLines.isEmpty(), "the client logged it too: " + clientLines);
+		} finally {
+			clientLogger.removeHandler(clientHandler);
+		}
 	}
 
 	@Test

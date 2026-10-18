@@ -82,6 +82,13 @@ class RabbitMqConnectionManager {
 			public void handleConnectionRecoveryException(Connection conn, Throwable exception) {
 				attemptFailed(exception);
 			}
+
+			@Override
+			public void handleUnexpectedConnectionDriverException(Connection conn, Throwable exception) {
+				// The client logs this on every lost connection and failed reconnect attempt; the CONNECTION PROBLEM
+				// lines already report them, so it is only kept for debugging
+				log.debugf(exception, "keycloak-to-rabbitmq connection driver error on RabbitMQ at %s", cfg.describeAddresses());
+			}
 		});
 	}
 

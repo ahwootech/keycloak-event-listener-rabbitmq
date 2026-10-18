@@ -112,6 +112,8 @@ they happen, whether or not any events are being sent, so they can be used for a
   - RabbitMQ blocking publishers (e.g. when it is low on memory or disk), with its reason. RabbitMQ only tells a connection it is blocked when it publishes during the alarm, so this is logged at the first event sent while it lasts
   - connecting or reconnecting (`reconnected to RabbitMQ at <host>:<port> after <duration> and <n> failed attempts`) and RabbitMQ unblocking publishers are logged at INFO
 
+The RabbitMQ client's own warning for each connection error (`An unexpected connection driver error occurred`) repeats what these lines report, so it is logged at DEBUG instead.
+
 ###### Background publishing
 `KK_TO_RMQ_PUBLISH_MODE` sets how events are sent:
   - `sync` (the default) - on the Keycloak request thread, once the request's transaction completes
