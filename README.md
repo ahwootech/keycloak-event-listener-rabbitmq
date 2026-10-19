@@ -152,7 +152,7 @@ essential events (e.g. `UPDATE_EMAIL,ADMIN:USER.UPDATE`):
   - it needs `KK_TO_RMQ_PUBLISH_MODE=confirmed`; with another mode, Keycloak doesn't start
   - essential events are already sent one at a time, in order, so an event can't be both essential and ordered; listing it in both stops Keycloak from starting
   - excluded events are never published, so an event can't be both excluded and ordered; listing it in both stops Keycloak from starting
-  - each Keycloak instance publishes on its own, so with several instances, the order is only kept among the events of one instance
+  - each Keycloak instance publishes on its own, so with several instances, the order is only kept among the events of one instance. Essential events don't have this limit for actions that follow one another: a request only completes once RabbitMQ has confirmed its essential event, so the event of a later action, on any instance, is always sent after it
 
 ###### Messages
 Every message's `messageId` property is Keycloak's own ID for the event, which is also in the message body as `id`, so consumers can detect duplicates and find the event in Keycloak's stored events.
