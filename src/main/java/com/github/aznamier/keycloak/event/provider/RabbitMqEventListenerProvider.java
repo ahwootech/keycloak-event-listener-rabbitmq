@@ -21,15 +21,16 @@ public class RabbitMqEventListenerProvider implements EventListenerProvider {
 	private static final Logger log = Logger.getLogger(RabbitMqEventListenerProvider.class);
 	
 	private final RabbitMqConfig cfg;
-	private final Channel channel;
+	private final RabbitMqConnectionManager connectionManager;
 
 	private final KeycloakSession session;
 
 	private final EventListenerTransaction tx = new EventListenerTransaction(this::publishAdminEvent, this::publishEvent);
 
-	public RabbitMqEventListenerProvider(Channel channel, KeycloakSession session, RabbitMqConfig cfg) {
+	// Created only by RabbitMqEventListenerProviderFactory; not part of the plugin's API, so it can change in any release
+	RabbitMqEventListenerProvider(RabbitMqConnectionManager connectionManager, KeycloakSession session, RabbitMqConfig cfg) {
 		this.cfg = cfg;
-		this.channel = channel;
+		this.connectionManager = connectionManager;
 		this.session = session;
 		session.getTransactionManager().enlistAfterCompletion(tx);
 	}
@@ -81,6 +82,11 @@ public class RabbitMqEventListenerProvider implements EventListenerProvider {
 	}
 
 	private void publishNotification(String messageString, BasicProperties props, String routingKey) {
+		Channel channel = connectionManager.getChannel();
+		if (channel == null) {
+			log.errorf("keycloak-to-rabbitmq ERROR sending message, not connected to RabbitMQ: %s%n", routingKey);
+			return;
+		}
 		try {
 			channel.basicPublish(cfg.getExchange(), routingKey, props, messageString.getBytes(StandardCharsets.UTF_8));
 			log.tracef("keycloak-to-rabbitmq SUCCESS sending message: %s%n", routingKey);

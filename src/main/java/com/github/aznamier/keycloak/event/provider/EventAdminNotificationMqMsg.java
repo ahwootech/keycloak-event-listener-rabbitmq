@@ -2,8 +2,6 @@ package com.github.aznamier.keycloak.event.provider;
 
 import java.io.Serializable;
 
-import javax.xml.bind.annotation.XmlRootElement;
-
 import org.keycloak.events.admin.AdminEvent;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
@@ -11,7 +9,6 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.fasterxml.jackson.annotation.JsonTypeInfo.Id;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
-@XmlRootElement
 @JsonTypeInfo(use = Id.CLASS)
 public class EventAdminNotificationMqMsg extends AdminEvent implements Serializable  {
 

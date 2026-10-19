@@ -5,14 +5,19 @@
     <groupId>com.github.aznamier.keycloak.event.provider</groupId>
     <artifactId>keycloak-to-rabbit</artifactId>
     <packaging>jar</packaging>
-	<version>3.0.5</version>
+	<version>4.0.0</version>
     
 
 
     <name>Keycloak: Event Publisher to RabbitMQ</name>
     <properties>
-    	<keycloak.version>21.1.2</keycloak.version>
+    	<keycloak.version>26.0.8</keycloak.version>
     	<jar.finalName>${project.artifactId}-${project.version}</jar.finalName>
+    	<junit.version>5.10.2</junit.version>
+    	<mockito.version>4.11.0</mockito.version>
+    	<!-- Newer than Mockito 4's own, so mocks also work when the build runs on recent JDKs -->
+    	<byte-buddy.version>1.17.7</byte-buddy.version>
+    	<testcontainers.version>1.21.3</testcontainers.version>
     </properties>
     
 	<distributionManagement>
@@ -64,6 +69,50 @@
 		    <artifactId>amqp-client</artifactId>
 		    <version>5.14.2</version>
 		</dependency>
+
+        <!-- Tests -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <version>${mockito.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>net.bytebuddy</groupId>
+            <artifactId>byte-buddy</artifactId>
+            <version>${byte-buddy.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>net.bytebuddy</groupId>
+            <artifactId>byte-buddy-agent</artifactId>
+            <version>${byte-buddy.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>rabbitmq</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>toxiproxy</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
         
     </dependencies>
 
@@ -74,11 +123,32 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <configuration>
-                    <source>1.8</source>
-                    <target>1.8</target>
+                    <!-- Keycloak 26 requires Java 17 -->
+                    <release>17</release>
                 </configuration>
             </plugin>
             
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+            </plugin>
+
+            <!-- Runs the *IT integration tests (RabbitMQ in Docker, via Testcontainers) in mvn verify -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <version>3.2.5</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
             <!-- Maven Assembly Plugin -->
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
@@ -100,14 +170,6 @@
 				  </execution>
 				</executions>
 			</plugin>
-			
-<!--            <plugin>-->
-<!--                <groupId>org.wildfly.plugins</groupId>-->
-<!--                <artifactId>wildfly-maven-plugin</artifactId>-->
-<!--                <configuration>-->
-<!--                    <skip>false</skip>-->
-<!--                </configuration>-->
-<!--            </plugin>-->
         </plugins>
     </build>
 </project>

@@ -6,22 +6,41 @@ on:
 
 jobs:
   build:
-    name: build
+    name: build (Keycloak ${{ matrix.keycloak }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The version the plugin is built for (its minimum), and the latest it is tested with
+        keycloak: ['26.0.8', '26.6.1']
     env:
       MAVEN_CLI_OPTS: "--batch-mode --errors --fail-at-end --show-version"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Set up JDK 17
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: 17
+          cache: maven
+      # it.requireDocker: the integration tests fail rather than skip without Docker, so CI can't pass without them
       - name: Build
         run: >
           ./mvnw $MAVEN_CLI_OPTS
+          -Dkeycloak.version=${{ matrix.keycloak }}
+          -Dit.requireDocker=true
           dependency:go-offline
           clean verify
+      # Full test output, including the plugin's logs from the integration tests
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-keycloak-${{ matrix.keycloak }}
+          path: |
+            target/surefire-reports/
+            target/failsafe-reports/
+          retention-days: 14

@@ -7,6 +7,7 @@
 | 1.x | 10.x |
 | 2.x | 13.x |
 | 3.x | 16.x |
+| 4.x | 26.x |
 
 For example here is the notification of the user updated by administrator
 
@@ -48,20 +49,21 @@ therefore its easy for Rabbit client to subscribe to selective combinations eg:
 
 
 ## USAGE:
-1. [Download the latest jar](https://github.com/aznamier/keycloak-event-listener-rabbitmq/blob/target/keycloak-to-rabbit-3.0.5.jar?raw=true) or build from source: ``mvn clean install``
-2. Copy jar into your Keycloak 
-    1. Keycloak version 17+ (Quarkus) `/opt/keycloak/providers/keycloak-to-rabbit-3.0.5.jar` 
-    2. Keycloak version 16 and older `/opt/jboss/keycloak/standalone/deployments/keycloak-to-rabbit-3.0.5.jar`
-3. Configure as described below (option 1 or 2 or 3)
+1. [Download the latest jar](https://github.com/aznamier/keycloak-event-listener-rabbitmq/blob/target/keycloak-to-rabbit-4.0.0.jar?raw=true) or build from source (Java 17+): ``mvn clean install``
+2. Copy jar into your Keycloak: `/opt/keycloak/providers/keycloak-to-rabbit-4.0.0.jar`
+3. Configure as described below
 4. Restart the Keycloak server
 5. Enable logging in Keycloak UI by adding **keycloak-to-rabbitmq**  
  `Manage > Events > Config > Events Config > Event Listeners`
 
 #### Configuration 
-###### Recommended: OPTION 1: just configure **ENVIRONMENT VARIABLES**
-  - `KK_TO_RMQ_URL` - default: *localhost*
+###### Environment variables
+Each setting can also be given as a Keycloak option, which takes precedence: `KK_TO_RMQ_HEARTBEAT_SECONDS` as
+`--spi-events-listener-keycloak-to-rabbitmq-heartbeat-seconds` (or the `KC_SPI_EVENTS_LISTENER_KEYCLOAK_TO_RABBITMQ_HEARTBEAT_SECONDS` environment variable), and so on.
+An invalid value, such as a number with extra characters (`5672x`), a number out of range, or a true/false setting set to anything other than `true` or `false`, stops Keycloak from starting with an error naming the setting.
+  - `KK_TO_RMQ_HOSTS` - required. One or more RabbitMQ hosts, comma-separated, each optionally with `:port` (otherwise `KK_TO_RMQ_PORT`; IPv6 addresses in brackets), e.g. `rabbit-1,rabbit-2,rabbit-3:5673`. The connection and its automatic recovery try them in turn. It was `KK_TO_RMQ_URL` before 4.0.0: it lists hosts, not URLs, and it's required so a missing or misnamed setting stops startup with a clear error instead of trying `localhost`
   - `KK_TO_RMQ_PORT` - default: *5672*
-  - `KK_TO_RMQ_VHOST` - default: *empty*
+  - `KK_TO_RMQ_VHOST` - required, e.g. */* for RabbitMQ's default virtual host
   - `KK_TO_RMQ_EXCHANGE` - default: *amq.topic*
   - `KK_TO_RMQ_USERNAME` - default: *admin*
   - `KK_TO_RMQ_PASSWORD` - default: *admin*
@@ -70,31 +72,26 @@ therefore its easy for Rabbit client to subscribe to selective combinations eg:
   - `KK_TO_RMQ_KEY_STORE_PASS` - default: *empty*
   - `KK_TO_RMQ_TRUST_STORE` - default: *empty*
   - `KK_TO_RMQ_TRUST_STORE_PASS` - default: *empty*
+  - `KK_TO_RMQ_TLS_VERIFY` - default: *true*
+  - `KK_TO_RMQ_HEARTBEAT_SECONDS` - default: *60*
+  - `KK_TO_RMQ_CONNECTION_TIMEOUT_MS` - default: *empty* (the client's 60000 for the TCP connection and 10000 for the handshake)
+  - `KK_TO_RMQ_NETWORK_RECOVERY_INTERVAL_MS` - default: *5000*
 
-###### Deprecated OPTION 2: edit Keycloak subsystem of WildFly (Keycloak 16 and older) standalone.xml or standalone-ha.xml:
+###### TLS
+With `KK_TO_RMQ_USE_TLS=true` the connection uses TLS 1.3 or 1.2, whichever both sides support, and checks RabbitMQ's certificate:
+  - against `KK_TO_RMQ_TRUST_STORE` (a JKS file, with `KK_TO_RMQ_TRUST_STORE_PASS`) if set, otherwise against the JVM's trusted certificates
+  - the certificate must match the host in `KK_TO_RMQ_HOSTS`
+  - `KK_TO_RMQ_KEY_STORE` (a PKCS12 file, with `KK_TO_RMQ_KEY_STORE_PASS`) adds a client certificate, for RabbitMQ setups that require one
+  - if TLS can't be set up (e.g. a missing or unreadable truststore), Keycloak doesn't start, rather than connecting without TLS
+  - `KK_TO_RMQ_TLS_VERIFY=false` skips the certificate and host name checks: the connection is still encrypted, but anyone who can intercept it could impersonate RabbitMQ, and a warning is logged at startup. It's meant for a self-signed certificate on a private network; adding that certificate to a truststore is the safer option
 
-```xml
-<spi name="eventsListener">
-    <provider name="keycloak-to-rabbitmq" enabled="true">
-        <properties>
-            <property name="url" value="${env.KK_TO_RMQ_URL:localhost}"/>
-            <property name="port" value="${env.KK_TO_RMQ_PORT:5672}"/>
-            <property name="vhost" value="${env.KK_TO_RMQ_VHOST:}"/>
-            <property name="exchange" value="${env.KK_TO_RMQ_EXCHANGE:amq.topic}"/>
-            <property name="use_tls" value="${env.KK_TO_RMQ_USE_TLS:false}"/>
-            <property name="key_store" value="${env.KK_TO_RMQ_KEY_STORE:}"/>
-            <property name="key_store_pass" value="${env.KK_TO_RMQ_KEY_STORE_PASS:}"/> 
-            <property name="trust_store" value="${env.KK_TO_RMQ_TRUST_STORE:}"/>
-            <property name="trust_store_pass" value="${env.KK_TO_RMQ_TRUST_STORE_PASS:}"/>           
-            <property name="username" value="${env.KK_TO_RMQ_USERNAME:guest}"/>
-            <property name="password" value="${env.KK_TO_RMQ_PASSWORD:guest}"/>
-        </properties>
-    </provider>
-</spi>
-```
-###### Deprecated OPTION 3 same effect as OPTION 2 but programatically WildFly (Keycloak 16 and older):
-```
-echo "yes" | $KEYCLOAK_HOME/bin/jboss-cli.sh --file=$KEYCLOAK_HOME/KEYCLOAK_TO_RABBIT.cli
-```
-
-
+###### Connection
+The connection to RabbitMQ is opened in the background when Keycloak starts and kept open, so connecting never holds up a
+request. If RabbitMQ is unreachable, Keycloak still starts and the connection is retried; after a connection drops, the
+RabbitMQ client's automatic recovery reconnects it. Events emitted while there is no connection are logged as not sent.
+Events are still sent on the request thread, so while RabbitMQ is connected but not responding (e.g. frozen, or blocking
+publishers when it is low on memory or disk), or until a host that died with the connection open is noticed, requests
+wait on it. The defaults below are the RabbitMQ Java client's own:
+  - `KK_TO_RMQ_HEARTBEAT_SECONDS` - how often the client and RabbitMQ check the other is still there. A connection to a broker that disappears without closing it (e.g. a host failure) is only detected after about two missed heartbeats, so lower values detect it sooner, e.g. *10*. RabbitMQ uses the lower of the client's and the server's values
+  - `KK_TO_RMQ_CONNECTION_TIMEOUT_MS` - how long a connection attempt waits for the TCP connection, and again for RabbitMQ to respond once it is open (e.g. when the broker is frozen or behind a proxy). Against an unreachable or frozen broker every attempt waits this long, so lower values reconnect sooner once RabbitMQ is back, e.g. *5000*. When not set, the client's defaults are used: 60000 for the TCP connection and 10000 for the response
+  - `KK_TO_RMQ_NETWORK_RECOVERY_INTERVAL_MS` - how long to wait between reconnect attempts, both for the first connection at startup and after a connection drops
