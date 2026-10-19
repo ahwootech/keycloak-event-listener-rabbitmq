@@ -1,6 +1,7 @@
 package com.github.aznamier.keycloak.event.provider;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -39,7 +40,9 @@ import org.keycloak.Config.Scope;
 import org.keycloak.events.Event;
 import org.keycloak.events.EventListenerProvider;
 import org.keycloak.events.EventType;
+import org.keycloak.models.AbstractKeycloakTransaction;
 import org.keycloak.models.KeycloakSession;
+import org.keycloak.models.KeycloakTransaction;
 import org.keycloak.models.KeycloakTransactionManager;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.RealmProvider;
@@ -357,6 +360,62 @@ class RabbitMqResilienceIT {
 		assertEquals(expected, receiveAll(count));
 	}
 
+	@Test
+	void confirmedEssentialEventsLetTheRequestCommit() throws Exception {
+		startEssentialPlugin();
+
+		Outcome outcome = sendEssentialEvent("confirmed");
+
+		outcome.assertCommitted();
+		GetResponse received = awaitMessage();
+		assertTrue(new String(received.getBody(), StandardCharsets.UTF_8).contains("REGISTER"));
+		assertEquals(2, received.getProps().getDeliveryMode(), "essential events are always persistent");
+	}
+
+	@Test
+	void essentialEventsWithNoQueueToReceiveThemRollTheRequestBack() throws Exception {
+		testChannel.queueUnbind(QUEUE, "amq.topic", "KK.EVENT.#");
+		startEssentialPlugin();
+
+		sendEssentialEvent("unroutable").assertRolledBackWithin(1000, "returned as unroutable");
+	}
+
+	@Test
+	void essentialEventsRejectedByAFullQueueRollTheRequestBack() throws Exception {
+		testChannel.queueDelete(QUEUE);
+		Map<String, Object> args = new HashMap<>();
+		args.put("x-max-length", 1);
+		args.put("x-overflow", "reject-publish");
+		testChannel.queueDeclare(QUEUE, true, false, false, args);
+		testChannel.queueBind(QUEUE, "amq.topic", "KK.EVENT.#");
+		testChannel.basicPublish("", QUEUE, null, "filler".getBytes(StandardCharsets.UTF_8));
+		startEssentialPlugin();
+
+		sendEssentialEvent("rejected").assertRolledBackWithin(1000, "rejected (nacked)");
+		assertEquals(1, testChannel.queueDeclarePassive(QUEUE).getMessageCount(), "only the filler is in the queue");
+	}
+
+	@Test
+	void essentialEventsNotConfirmedInTimeRollTheRequestBack() throws Exception {
+		startEssentialPlugin();
+		// RabbitMQ stops responding, and the plugin hasn't noticed yet (that takes two missed heartbeats)
+		blackHole();
+
+		Outcome outcome = sendEssentialEvent("frozen");
+
+		outcome.assertRolledBackWithin(3000, "not confirmed within the essential events timeout");
+		assertTrue(outcome.elapsedMs >= 900, "the request should wait for the 1s timeout, took " + outcome.elapsedMs + " ms");
+	}
+
+	@Test
+	void essentialEventsWhileDisconnectedRollTheRequestBackStraightAway() throws Exception {
+		RabbitMqConnectionManager manager = startEssentialPlugin();
+		proxy.disable();
+		await(() -> manager.getEssentialChannel() == null);
+
+		sendEssentialEvent("disconnected").assertRolledBackWithin(200, "not connected to RabbitMQ");
+	}
+
 	private void startPlugin() {
 		Scope scope = mock(Scope.class);
 		when(scope.get(anyString())).thenAnswer(i -> settings.get(i.<String>getArgument(0)));
@@ -374,6 +433,40 @@ class RabbitMqResilienceIT {
 
 	/** Like {@link #sendEvent(String)}, with an event detail of paddingChars characters, to make the event bigger. */
 	private void sendEvent(String userId, int paddingChars) {
+		sendEvent(userId, EventType.LOGIN, null, paddingChars);
+	}
+
+	/** Starts the plugin with REGISTER as an essential event and a 1s timeout, and waits until it is connected. */
+	private RabbitMqConnectionManager startEssentialPlugin() throws Exception {
+		settings.put("essential_events", "REGISTER");
+		settings.put("essential_events_timeout_ms", "1000");
+		startPlugin();
+		RabbitMqConnectionManager manager = manager();
+		await(() -> manager.getEssentialChannel() != null);
+		return manager;
+	}
+
+	/**
+	 * Emits a REGISTER in a request that also changes the database, represented by a transaction that records
+	 * whether Keycloak committed or rolled it back.
+	 */
+	private Outcome sendEssentialEvent(String userId) {
+		RecordingTransaction database = new RecordingTransaction();
+		long start = System.currentTimeMillis();
+		RuntimeException error = null;
+		try {
+			sendEvent(userId, EventType.REGISTER, database);
+		} catch (RuntimeException e) {
+			error = e;
+		}
+		return new Outcome(database, System.currentTimeMillis() - start, error);
+	}
+
+	private void sendEvent(String userId, EventType type, KeycloakTransaction database) {
+		sendEvent(userId, type, database, 0);
+	}
+
+	private void sendEvent(String userId, EventType type, KeycloakTransaction database, int paddingChars) {
 		RealmModel realm = mock(RealmModel.class);
 		when(realm.getName()).thenReturn("test");
 		RealmProvider realms = mock(RealmProvider.class);
@@ -386,10 +479,13 @@ class RabbitMqResilienceIT {
 		KeycloakTransactionManager tm = new DefaultKeycloakTransactionManager(session);
 		when(session.getTransactionManager()).thenReturn(tm);
 		tm.begin();
+		if (database != null) {
+			tm.enlist(database);
+		}
 
 		EventListenerProvider provider = factory.create(session);
 		Event event = new Event();
-		event.setType(EventType.LOGIN);
+		event.setType(type);
 		event.setRealmId("realm-id");
 		event.setClientId("my-client");
 		event.setUserId(userId);
@@ -541,6 +637,45 @@ class RabbitMqResilienceIT {
 				throw new AssertionError("timed out");
 			}
 			Thread.sleep(50);
+		}
+	}
+
+	private static final class RecordingTransaction extends AbstractKeycloakTransaction {
+		volatile boolean committed;
+		volatile boolean rolledBack;
+
+		@Override
+		protected void commitImpl() {
+			committed = true;
+		}
+
+		@Override
+		protected void rollbackImpl() {
+			rolledBack = true;
+		}
+	}
+
+	private static final class Outcome {
+		final RecordingTransaction database;
+		final long elapsedMs;
+		final RuntimeException error;
+
+		Outcome(RecordingTransaction database, long elapsedMs, RuntimeException error) {
+			this.database = database;
+			this.elapsedMs = elapsedMs;
+			this.error = error;
+		}
+
+		void assertCommitted() {
+			assertNull(error, "the request failed");
+			assertTrue(database.committed && !database.rolledBack, "the database change should be committed");
+		}
+
+		void assertRolledBackWithin(long maxMs, String reason) {
+			assertNotNull(error, "the request should fail");
+			assertTrue(error.getMessage().contains(reason), "expected the reason \"" + reason + "\", got: " + error.getMessage());
+			assertTrue(database.rolledBack && !database.committed, "the database change should be rolled back");
+			assertTrue(elapsedMs < maxMs, "the request took " + elapsedMs + " ms, expected under " + maxMs);
 		}
 	}
 }
