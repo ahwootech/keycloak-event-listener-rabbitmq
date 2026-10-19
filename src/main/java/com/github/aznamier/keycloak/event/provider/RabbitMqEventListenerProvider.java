@@ -4,7 +4,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 
-import org.jboss.logging.Logger;
 import org.keycloak.events.Event;
 import org.keycloak.events.EventListenerProvider;
 import org.keycloak.events.EventListenerTransaction;
@@ -14,23 +13,18 @@ import org.keycloak.models.KeycloakSession;
 import com.rabbitmq.client.AMQP;
 import com.rabbitmq.client.AMQP.BasicProperties;
 import com.rabbitmq.client.AMQP.BasicProperties.Builder;
-import com.rabbitmq.client.Channel;
 
 public class RabbitMqEventListenerProvider implements EventListenerProvider {
 
-	private static final Logger log = Logger.getLogger(RabbitMqEventListenerProvider.class);
-	
-	private final RabbitMqConfig cfg;
-	private final RabbitMqConnectionManager connectionManager;
+	private final RabbitMqPublisher publisher;
 
 	private final KeycloakSession session;
 
 	private final EventListenerTransaction tx = new EventListenerTransaction(this::publishAdminEvent, this::publishEvent);
 
 	// Created only by RabbitMqEventListenerProviderFactory; not part of the plugin's API, so it can change in any release
-	RabbitMqEventListenerProvider(RabbitMqConnectionManager connectionManager, KeycloakSession session, RabbitMqConfig cfg) {
-		this.cfg = cfg;
-		this.connectionManager = connectionManager;
+	RabbitMqEventListenerProvider(RabbitMqPublisher publisher, KeycloakSession session) {
+		this.publisher = publisher;
 		this.session = session;
 		session.getTransactionManager().enlistAfterCompletion(tx);
 	}
@@ -82,17 +76,7 @@ public class RabbitMqEventListenerProvider implements EventListenerProvider {
 	}
 
 	private void publishNotification(String messageString, BasicProperties props, String routingKey) {
-		Channel channel = connectionManager.getChannel();
-		if (channel == null) {
-			log.errorf("keycloak-to-rabbitmq ERROR sending message, not connected to RabbitMQ: %s%n", routingKey);
-			return;
-		}
-		try {
-			channel.basicPublish(cfg.getExchange(), routingKey, props, messageString.getBytes(StandardCharsets.UTF_8));
-			log.tracef("keycloak-to-rabbitmq SUCCESS sending message: %s%n", routingKey);
-		} catch (Exception ex) {
-			log.errorf(ex, "keycloak-to-rabbitmq ERROR sending message: %s%n", routingKey);
-		}
+		publisher.publish(routingKey, props, messageString.getBytes(StandardCharsets.UTF_8));
 	}
 
 }

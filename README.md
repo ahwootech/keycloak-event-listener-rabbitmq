@@ -76,6 +76,10 @@ An invalid value, such as a number with extra characters (`5672x`), a number out
   - `KK_TO_RMQ_HEARTBEAT_SECONDS` - default: *60*
   - `KK_TO_RMQ_CONNECTION_TIMEOUT_MS` - default: *empty* (the client's 60000 for the TCP connection and 10000 for the handshake)
   - `KK_TO_RMQ_NETWORK_RECOVERY_INTERVAL_MS` - default: *5000*
+  - `KK_TO_RMQ_PUBLISH_MODE` - default: *sync*
+  - `KK_TO_RMQ_PUBLISH_BUFFER_MAX_MB` - default: *100*
+  - `KK_TO_RMQ_SHUTDOWN_FLUSH_TIMEOUT_MS` - default: *5000*
+  - `KK_TO_RMQ_CONFIRM_TIMEOUT_MS` - default: *5000*
 
 ###### TLS
 With `KK_TO_RMQ_USE_TLS=true` the connection uses TLS 1.3 or 1.2, whichever both sides support, and checks RabbitMQ's certificate:
@@ -88,10 +92,35 @@ With `KK_TO_RMQ_USE_TLS=true` the connection uses TLS 1.3 or 1.2, whichever both
 ###### Connection
 The connection to RabbitMQ is opened in the background when Keycloak starts and kept open, so connecting never holds up a
 request. If RabbitMQ is unreachable, Keycloak still starts and the connection is retried; after a connection drops, the
-RabbitMQ client's automatic recovery reconnects it. Events emitted while there is no connection are logged as not sent.
-Events are still sent on the request thread, so while RabbitMQ is connected but not responding (e.g. frozen, or blocking
-publishers when it is low on memory or disk), or until a host that died with the connection open is noticed, requests
-wait on it. The defaults below are the RabbitMQ Java client's own:
+RabbitMQ client's automatic recovery reconnects it. By default, events emitted while there is no connection are logged as
+not sent, and events are sent on the request thread, so while RabbitMQ is connected but not responding (e.g. frozen, or
+blocking publishers when it is low on memory or disk), or until a host that died with the connection open is noticed,
+requests wait on it; [background publishing](#background-publishing) avoids both. The defaults below are the RabbitMQ
+Java client's own:
   - `KK_TO_RMQ_HEARTBEAT_SECONDS` - how often the client and RabbitMQ check the other is still there. A connection to a broker that disappears without closing it (e.g. a host failure) is only detected after about two missed heartbeats, so lower values detect it sooner, e.g. *10*. RabbitMQ uses the lower of the client's and the server's values
   - `KK_TO_RMQ_CONNECTION_TIMEOUT_MS` - how long a connection attempt waits for the TCP connection, and again for RabbitMQ to respond once it is open (e.g. when the broker is frozen or behind a proxy). Against an unreachable or frozen broker every attempt waits this long, so lower values reconnect sooner once RabbitMQ is back, e.g. *5000*. When not set, the client's defaults are used: 60000 for the TCP connection and 10000 for the response
   - `KK_TO_RMQ_NETWORK_RECOVERY_INTERVAL_MS` - how long to wait between reconnect attempts, both for the first connection at startup and after a connection drops
+
+###### Background publishing
+`KK_TO_RMQ_PUBLISH_MODE` sets how events are sent:
+  - `sync` (the default) - on the Keycloak request thread, once the request's transaction completes
+  - `async` - from a single background thread, so requests such as logins never wait on RabbitMQ
+  - `confirmed` - like `async`, and each event is kept until RabbitMQ confirms it has it (see [publisher confirms](#publisher-confirms))
+
+With `async` or `confirmed`:
+  - while RabbitMQ is unreachable or not accepting messages, events wait in an in-memory buffer and are sent in order once it is back
+  - `KK_TO_RMQ_PUBLISH_BUFFER_MAX_MB` limits the buffer's memory (each buffered event counts as about 1.4 KB, so 100 MB holds roughly 75,000 events; size it as event rate × the longest outage to ride out × 1.4 KB); when it is full, new events are dropped. A warning is logged when it passes half full
+  - on shutdown, buffered events are sent for up to `KK_TO_RMQ_SHUTDOWN_FLUSH_TIMEOUT_MS`
+  - buffered events are lost if Keycloak stops or crashes before they are sent
+  - with `async`, events sent just before a connection drops, before the client notices, can be lost without an error
+
+Every buffered event that is never sent is logged at ERROR level with the prefix `keycloak-to-rabbitmq PUBLISH FAILED`,
+which can be used for alerting. Dropped events are reported at most once a minute, with a count.
+
+###### Publisher confirms
+With `KK_TO_RMQ_PUBLISH_MODE=confirmed`, events are sent in batches and only removed from the buffer once RabbitMQ
+confirms it has them, so events sent into a connection that has just died are sent again once it is back instead of
+being lost:
+  - a batch that RabbitMQ rejects, or doesn't confirm within `KK_TO_RMQ_CONFIRM_TIMEOUT_MS`, is sent again, one event at a time, so events RabbitMQ accepts aren't held up by one it keeps rejecting
+  - consumers may therefore receive an event more than once
+  - RabbitMQ confirms an event once it has routed it, or found no queue to route it to; an event no queue is bound for is confirmed and discarded
