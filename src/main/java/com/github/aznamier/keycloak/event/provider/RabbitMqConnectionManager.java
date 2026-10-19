@@ -11,9 +11,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.jboss.logging.Logger;
 
+import com.rabbitmq.client.BlockedListener;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
+import com.rabbitmq.client.Recoverable;
+import com.rabbitmq.client.RecoveryListener;
+import com.rabbitmq.client.ShutdownSignalException;
+import com.rabbitmq.client.impl.DefaultExceptionHandler;
 
 /**
  * Keeps a single long-lived connection and channel to RabbitMQ.
@@ -25,13 +30,20 @@ import com.rabbitmq.client.ConnectionFactory;
  * When essential events are configured, a second channel in confirm mode is kept for them, so they are
  * never held up by (or confused with) messages published on the other channel.
  *
+ * Losing the connection, failing to reconnect, and RabbitMQ blocking publishers are logged with the
+ * {@link #CONNECTION_PROBLEM} prefix as soon as they happen, whether or not any events are being sent.
+ *
  * Internal to the plugin, so it can change in any release.
  */
 class RabbitMqConnectionManager {
 
 	private static final Logger log = Logger.getLogger(RabbitMqConnectionManager.class);
 
+	// Prefix for every log line about RabbitMQ being unreachable or blocking publishers, so it can be alerted on
+	static final String CONNECTION_PROBLEM = "keycloak-to-rabbitmq CONNECTION PROBLEM";
+
 	private static final int CLOSE_TIMEOUT_MS = 5000;
+	private static final long STILL_DOWN_REPORT_INTERVAL_MS = 60_000;
 
 	private final ConnectionFactory connectionFactory;
 	private final RabbitMqConfig cfg;
@@ -48,12 +60,36 @@ class RabbitMqConnectionManager {
 	// messageIds of mandatory messages RabbitMQ returned as unroutable on the essential channel
 	private final Set<String> returnedMessageIds = ConcurrentHashMap.newKeySet();
 	private volatile boolean closed;
-	// Only used on the connect thread
+
+	// Connection state, for logging; guarded by this. The first connection at startup and automatic recovery
+	// after a drop are reported the same way.
+	private boolean everConnected;
+	// When the connection was lost (or the first attempt at startup failed); 0 while connected
+	private long downSince;
 	private int failedAttempts;
+	private long lastStillDownReport;
+	private long blockedSince;
+	// Package-private so tests don't have to wait a minute
+	long stillDownReportIntervalMs = STILL_DOWN_REPORT_INTERVAL_MS;
 
 	RabbitMqConnectionManager(ConnectionFactory connectionFactory, RabbitMqConfig cfg) {
 		this.connectionFactory = connectionFactory;
 		this.cfg = cfg;
+		// Failed reconnect attempts by automatic recovery are reported here, at most once a minute,
+		// instead of the client logging every attempt with a stack trace
+		connectionFactory.setExceptionHandler(new DefaultExceptionHandler() {
+			@Override
+			public void handleConnectionRecoveryException(Connection conn, Throwable exception) {
+				attemptFailed(exception);
+			}
+
+			@Override
+			public void handleUnexpectedConnectionDriverException(Connection conn, Throwable exception) {
+				// The client logs this on every lost connection and failed reconnect attempt; the CONNECTION PROBLEM
+				// lines already report them, so it is only kept for debugging
+				log.debugf(exception, "keycloak-to-rabbitmq connection driver error on RabbitMQ at %s", cfg.describeAddresses());
+			}
+		});
 	}
 
 	void start() {
@@ -127,18 +163,13 @@ class RabbitMqConnectionManager {
 		try {
 			Connection conn = connection;
 			if (conn == null) {
-				if (failedAttempts == 0) {
+				if (isFirstAttempt()) {
 					log.infof("keycloak-to-rabbitmq connecting to RabbitMQ at %s", cfg.describeAddresses());
 				}
 				conn = connectionFactory.newConnection(cfg.getAddresses());
+				watch(conn);
 				connection = conn;
-				if (failedAttempts == 0) {
-					log.infof("keycloak-to-rabbitmq connected to RabbitMQ at %s", cfg.describeAddresses());
-				} else {
-					log.infof("keycloak-to-rabbitmq connected to RabbitMQ at %s after %d failed attempts",
-							cfg.describeAddresses(), failedAttempts);
-				}
-				failedAttempts = 0;
+				connected();
 			} else if (!conn.isOpen()) {
 				// Automatic recovery is reconnecting; it restores the channel too
 				return;
@@ -169,17 +200,133 @@ class RabbitMqConnectionManager {
 				}
 			}
 		} catch (IOException | TimeoutException e) {
-			long retryMs = connectionFactory.getNetworkRecoveryInterval();
-			failedAttempts++;
-			// Full stack trace only on the first failure, so a long outage doesn't flood the logs
-			if (failedAttempts == 1) {
-				log.errorf(e, "keycloak-to-rabbitmq ERROR on connection to RabbitMQ at %s, retrying every %d ms",
-						cfg.describeAddresses(), retryMs);
+			if (connection == null) {
+				attemptFailed(e);
 			} else {
-				log.errorf("keycloak-to-rabbitmq ERROR on connection to RabbitMQ at %s (attempt %d), retrying in %d ms: %s",
-						cfg.describeAddresses(), failedAttempts, retryMs, e);
+				log.errorf(e, "keycloak-to-rabbitmq ERROR opening a channel to RabbitMQ at %s, retrying in %d ms",
+						cfg.describeAddresses(), connectionFactory.getNetworkRecoveryInterval());
 			}
-			scheduleConnect(retryMs);
+			scheduleConnect(connectionFactory.getNetworkRecoveryInterval());
 		}
+	}
+
+	/**
+	 * Logs the connection being lost, recovered or blocked. The listeners stay registered when automatic recovery
+	 * replaces the underlying connection.
+	 */
+	private void watch(Connection conn) {
+		conn.addShutdownListener(cause -> {
+			if (!closed && !cause.isInitiatedByApplication()) {
+				connectionLost(cause);
+			}
+		});
+		conn.addBlockedListener(new BlockedListener() {
+			@Override
+			public void handleBlocked(String reason) {
+				blocked(reason);
+			}
+
+			@Override
+			public void handleUnblocked() {
+				unblocked();
+			}
+		});
+		if (conn instanceof Recoverable) {
+			((Recoverable) conn).addRecoveryListener(new RecoveryListener() {
+				@Override
+				public void handleRecovery(Recoverable recoverable) {
+					connected();
+				}
+
+				@Override
+				public void handleRecoveryStarted(Recoverable recoverable) {
+					// Logged when the connection is lost
+				}
+			});
+		}
+	}
+
+	private synchronized boolean isFirstAttempt() {
+		return !everConnected && failedAttempts == 0;
+	}
+
+	private synchronized void connectionLost(ShutdownSignalException cause) {
+		long now = System.currentTimeMillis();
+		downSince = now;
+		lastStillDownReport = now;
+		failedAttempts = 0;
+		blockedSince = 0;
+		log.errorf("%s: connection to RabbitMQ at %s lost, reconnecting every %d ms: %s", CONNECTION_PROBLEM,
+				cfg.describeAddresses(), connectionFactory.getNetworkRecoveryInterval(), describe(cause));
+	}
+
+	/**
+	 * A connection attempt failed, at startup or during automatic recovery. The first failure at startup is logged
+	 * with its stack trace; after that, a summary at most once a minute, so a long outage doesn't flood the logs.
+	 */
+	private synchronized void attemptFailed(Throwable e) {
+		long now = System.currentTimeMillis();
+		failedAttempts++;
+		if (downSince == 0) {
+			downSince = now;
+			lastStillDownReport = now;
+			if (!everConnected) {
+				log.errorf(e, "%s: could not connect to RabbitMQ at %s, retrying every %d ms", CONNECTION_PROBLEM,
+						cfg.describeAddresses(), connectionFactory.getNetworkRecoveryInterval());
+			}
+			return;
+		}
+		if (now - lastStillDownReport >= stillDownReportIntervalMs) {
+			lastStillDownReport = now;
+			log.errorf("%s: still not connected to RabbitMQ at %s after %s and %s, retrying every %d ms: %s",
+					CONNECTION_PROBLEM, cfg.describeAddresses(), duration(now - downSince), failedAttempts(),
+					connectionFactory.getNetworkRecoveryInterval(), e);
+		}
+	}
+
+	private synchronized void connected() {
+		if (downSince == 0) {
+			log.infof("keycloak-to-rabbitmq connected to RabbitMQ at %s", cfg.describeAddresses());
+		} else {
+			log.infof("keycloak-to-rabbitmq %s to RabbitMQ at %s after %s and %s",
+					everConnected ? "reconnected" : "connected", cfg.describeAddresses(),
+					duration(System.currentTimeMillis() - downSince), failedAttempts());
+		}
+		everConnected = true;
+		downSince = 0;
+		failedAttempts = 0;
+	}
+
+	private synchronized void blocked(String reason) {
+		blockedSince = System.currentTimeMillis();
+		log.errorf("%s: RabbitMQ at %s is blocking publishers: %s", CONNECTION_PROBLEM, cfg.describeAddresses(), reason);
+	}
+
+	private synchronized void unblocked() {
+		if (blockedSince != 0) {
+			log.infof("keycloak-to-rabbitmq RabbitMQ at %s unblocked publishers after %s", cfg.describeAddresses(),
+					duration(System.currentTimeMillis() - blockedSince));
+		}
+		blockedSince = 0;
+	}
+
+	private String failedAttempts() {
+		return failedAttempts + (failedAttempts == 1 ? " failed attempt" : " failed attempts");
+	}
+
+	private static String describe(ShutdownSignalException cause) {
+		// A missed heartbeat or a socket error is the cause; a close by the broker is described by the signal itself
+		return cause.getCause() != null ? cause.getCause().toString() : cause.getMessage();
+	}
+
+	static String duration(long ms) {
+		long s = ms / 1000;
+		if (s < 60) {
+			return s + " s";
+		}
+		if (s < 3600) {
+			return (s / 60) + " m " + (s % 60) + " s";
+		}
+		return (s / 3600) + " h " + (s % 3600 / 60) + " m";
 	}
 }
