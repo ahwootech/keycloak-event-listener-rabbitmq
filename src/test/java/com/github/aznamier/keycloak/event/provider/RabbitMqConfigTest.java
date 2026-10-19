@@ -77,6 +77,17 @@ class RabbitMqConfigTest {
 	}
 
 	@Test
+	void missingHostsStopStartup() {
+		Map<String, String> settings = new HashMap<>();
+		settings.put("hosts", null);
+		IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> fromSettings(settings));
+
+		assertEquals("keycloak-to-rabbitmq setting hosts (KK_TO_RMQ_HOSTS) must be set to one or more comma-separated RabbitMQ hosts, e.g. rabbitmq (it was KK_TO_RMQ_URL before 4.0.0), got ''",
+				e.getMessage());
+		assertThrows(IllegalArgumentException.class, () -> fromSettings("hosts", " "));
+	}
+
+	@Test
 	void aMissingVhostStopsStartup() {
 		Map<String, String> settings = new HashMap<>();
 		settings.put("vhost", null);
@@ -89,23 +100,22 @@ class RabbitMqConfigTest {
 	}
 
 	@Test
-	void urlListsOneOrMoreHostsEachWithAnOptionalPort() {
+	void hostsListsOneOrMoreHostsEachWithAnOptionalPort() {
 		Map<String, String> settings = new HashMap<>();
-		settings.put("url", "rabbit-1, rabbit-2:5673,,[::1]:5674, [fe80::1], rabbit-3");
+		settings.put("hosts", "rabbit-1, rabbit-2:5673,,[::1]:5674, [fe80::1], rabbit-3");
 		settings.put("port", "5671");
 
 		assertEquals("rabbit-1:5671, rabbit-2:5673, [::1]:5674, [fe80::1]:5671, rabbit-3:5671", fromSettings(settings).describeAddresses());
-		assertEquals("localhost:5672", fromSettings(new HashMap<>()).describeAddresses());
-		assertEquals("rabbit:5673", fromSettings("url", "rabbit:5673").describeAddresses());
+		assertEquals("rabbit:5673", fromSettings("hosts", "rabbit:5673").describeAddresses());
 	}
 
 	@Test
-	void anInvalidUrlStopsStartup() {
-		assertEquals("keycloak-to-rabbitmq setting url (KK_TO_RMQ_URL) must be one or more comma-separated hosts, each optionally with :port (IPv6 addresses in brackets), got 'rabbit-1,rabbit-2:abc'",
-				assertThrows(IllegalArgumentException.class, () -> fromSettings("url", "rabbit-1,rabbit-2:abc")).getMessage());
-		assertThrows(IllegalArgumentException.class, () -> fromSettings("url", "rabbit:70000"));
-		assertThrows(IllegalArgumentException.class, () -> fromSettings("url", " , "));
-		assertThrows(IllegalArgumentException.class, () -> fromSettings("url", "fe80::1"), "IPv6 needs brackets");
+	void invalidHostsStopStartup() {
+		assertEquals("keycloak-to-rabbitmq setting hosts (KK_TO_RMQ_HOSTS) must be one or more comma-separated hosts, each optionally with :port (IPv6 addresses in brackets), got 'rabbit-1,rabbit-2:abc'",
+				assertThrows(IllegalArgumentException.class, () -> fromSettings("hosts", "rabbit-1,rabbit-2:abc")).getMessage());
+		assertThrows(IllegalArgumentException.class, () -> fromSettings("hosts", "rabbit:70000"));
+		assertThrows(IllegalArgumentException.class, () -> fromSettings("hosts", " , "));
+		assertThrows(IllegalArgumentException.class, () -> fromSettings("hosts", "fe80::1"), "IPv6 needs brackets");
 	}
 
 	@Test
@@ -144,9 +154,12 @@ class RabbitMqConfigTest {
 		return fromSettings(settings);
 	}
 
-	/** The plugin's configuration from these Keycloak options, with vhost "/" unless they set it (even to null). */
+	/** The plugin's configuration from these Keycloak options, with hosts "localhost" and vhost "/" unless they set them (even to null). */
 	private static RabbitMqConfig fromSettings(Map<String, String> settings) {
 		Map<String, String> withVhost = new HashMap<>(settings);
+		if (!settings.containsKey("hosts")) {
+			withVhost.put("hosts", "localhost");
+		}
 		if (!settings.containsKey("vhost")) {
 			withVhost.put("vhost", "/");
 		}

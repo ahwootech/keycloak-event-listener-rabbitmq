@@ -95,7 +95,7 @@ class RabbitMqResilienceIT {
 		testChannel.queueDeclare(QUEUE, true, false, false, null);
 		testChannel.queueBind(QUEUE, "amq.topic", "KK.EVENT.#");
 
-		settings.put("url", toxiproxy.getHost());
+		settings.put("hosts", toxiproxy.getHost());
 		settings.put("port", String.valueOf(toxiproxy.getMappedPort(PROXY_PORT)));
 		settings.put("username", rabbitmq.getAdminUsername());
 		settings.put("password", rabbitmq.getAdminPassword());
@@ -171,7 +171,7 @@ class RabbitMqResilienceIT {
 		Proxy proxyB = client.createProxy("rabbitmq-b", "0.0.0.0:" + (PROXY_PORT + 1), "rabbitmq:5672");
 		String hostA = toxiproxy.getHost() + ":" + toxiproxy.getMappedPort(PROXY_PORT);
 		String hostB = toxiproxy.getHost() + ":" + toxiproxy.getMappedPort(PROXY_PORT + 1);
-		settings.put("url", hostA + "," + hostB);
+		settings.put("hosts", hostA + "," + hostB);
 		try {
 			// Only B is reachable at startup
 			proxy.disable();

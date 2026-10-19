@@ -49,6 +49,7 @@ class RabbitMqEventListenerProviderFactoryTest {
 	}
 
 	private static ConnectionFactory initFactory(Map<String, String> settings) throws Exception {
+		settings.putIfAbsent("hosts", "localhost");
 		settings.putIfAbsent("vhost", "/");
 		Scope scope = mock(Scope.class);
 		when(scope.get(anyString())).thenAnswer(i -> settings.get(i.<String>getArgument(0)));

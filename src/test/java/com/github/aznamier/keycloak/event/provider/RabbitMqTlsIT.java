@@ -64,7 +64,7 @@ class RabbitMqTlsIT {
 	@BeforeEach
 	void setUp() {
 		managerLogger.addHandler(logHandler);
-		settings.put("url", "localhost");
+		settings.put("hosts", "localhost");
 		settings.put("port", String.valueOf(rabbitmq.getAmqpsPort()));
 		settings.put("username", rabbitmq.getAdminUsername());
 		settings.put("password", rabbitmq.getAdminPassword());

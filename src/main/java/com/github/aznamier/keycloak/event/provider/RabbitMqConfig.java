@@ -25,7 +25,7 @@ public class RabbitMqConfig {
 	private static final Pattern SPACE = Pattern.compile(" ");
 	private static final Pattern DOT = Pattern.compile("\\.");
 
-	private String hostUrl;
+	private String hosts;
 	private Integer port;
 	private String username;
 	private String password;
@@ -105,7 +105,12 @@ public class RabbitMqConfig {
 	public static RabbitMqConfig createFromScope(Scope config) {
 		RabbitMqConfig cfg = new RabbitMqConfig();
 		
-		cfg.hostUrl = resolveConfigVar(config, "url", "localhost");
+		// Required, like the vhost: a default of localhost would hide a missing or misnamed setting behind connection
+		// errors. Called hosts, not url (its name before 4.0.0), because it lists host[:port] entries, not URLs
+		cfg.hosts = resolveConfigVar(config, "hosts", "");
+		if (cfg.hosts.trim().isEmpty()) {
+			throw invalid("hosts", cfg.hosts, "set to one or more comma-separated RabbitMQ hosts, e.g. rabbitmq (it was KK_TO_RMQ_URL before 4.0.0)");
+		}
 		cfg.port = (int) number(config, "port", "5672", 1, 65535);
 		// Fails startup on an invalid list of hosts
 		cfg.getAddresses();
@@ -188,7 +193,7 @@ public class RabbitMqConfig {
 		if (fromKeycloak != null) {
 			value = fromKeycloak;
 		} else {
-			//try from env variables eg: KK_TO_RMQ_URL:
+			//try from env variables eg: KK_TO_RMQ_HOSTS:
 			String envVariableName = "KK_TO_RMQ_" + variableName.toUpperCase(Locale.ENGLISH);
 			String env = System.getenv(envVariableName);
 			if(env != null) {
@@ -209,7 +214,7 @@ public class RabbitMqConfig {
 	 */
 	public List<Address> getAddresses() {
 		List<Address> addresses = new ArrayList<>();
-		for (String entry : hostUrl.split(",")) {
+		for (String entry : hosts.split(",")) {
 			if (entry.trim().isEmpty()) {
 				continue;
 			}
@@ -217,23 +222,23 @@ public class RabbitMqConfig {
 			try {
 				address = Address.parseAddress(entry.trim());
 			} catch (RuntimeException e) {
-				throw invalidUrl();
+				throw invalidHosts();
 			}
 			if (address.getPort() == -1) {
 				address = new Address(address.getHost(), port);
 			} else if (address.getPort() < 1 || address.getPort() > 65535) {
-				throw invalidUrl();
+				throw invalidHosts();
 			}
 			addresses.add(address);
 		}
 		if (addresses.isEmpty()) {
-			throw invalidUrl();
+			throw invalidHosts();
 		}
 		return addresses;
 	}
 
-	private IllegalArgumentException invalidUrl() {
-		return invalid("url", hostUrl, "one or more comma-separated hosts, each optionally with :port (IPv6 addresses in brackets)");
+	private IllegalArgumentException invalidHosts() {
+		return invalid("hosts", hosts, "one or more comma-separated hosts, each optionally with :port (IPv6 addresses in brackets)");
 	}
 
 	/** The hosts, for log messages: e.g. "rabbit-1:5672, rabbit-2:5672". */
@@ -241,11 +246,11 @@ public class RabbitMqConfig {
 		return getAddresses().stream().map(a -> a.getHost() + ":" + a.getPort()).collect(Collectors.joining(", "));
 	}
 
-	public String getHostUrl() {
-		return hostUrl;
+	public String getHosts() {
+		return hosts;
 	}
-	public void setHostUrl(String hostUrl) {
-		this.hostUrl = hostUrl;
+	public void setHosts(String hosts) {
+		this.hosts = hosts;
 	}
 	public Integer getPort() {
 		return port;
