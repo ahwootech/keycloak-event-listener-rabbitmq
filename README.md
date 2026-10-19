@@ -19,6 +19,7 @@ For example here is the notification of the user updated by administrator
 ```
 {
   "@class" : "com.github.aznamier.keycloak.event.provider.EventAdminNotificationMqMsg",
+  "id" : "********-****-****-****-**********",
   "time" : 1596951200408,
   "realmId" : "MYREALM",
   "authDetails" : {
@@ -65,6 +66,7 @@ An invalid value, such as a number with extra characters (`5672x`), a number out
   - `KK_TO_RMQ_PORT` - default: *5672*
   - `KK_TO_RMQ_VHOST` - required, e.g. */* for RabbitMQ's default virtual host
   - `KK_TO_RMQ_EXCHANGE` - default: *amq.topic*
+  - `KK_TO_RMQ_PERSISTENT_MESSAGES` - default: *false*
   - `KK_TO_RMQ_USERNAME` - default: *admin*
   - `KK_TO_RMQ_PASSWORD` - default: *admin*
   - `KK_TO_RMQ_USE_TLS` - default: *false*
@@ -124,3 +126,9 @@ being lost:
   - a batch that RabbitMQ rejects, or doesn't confirm within `KK_TO_RMQ_CONFIRM_TIMEOUT_MS`, is sent again, one event at a time, so events RabbitMQ accepts aren't held up by one it keeps rejecting
   - consumers may therefore receive an event more than once
   - RabbitMQ confirms an event once it has routed it, or found no queue to route it to; an event no queue is bound for is confirmed and discarded
+
+###### Messages
+Every message's `messageId` property is Keycloak's own ID for the event, which is also in the message body as `id`, so consumers can detect duplicates and find the event in Keycloak's stored events.
+When Keycloak tracing is enabled, every message also carries the trace of the request that produced the event, in the `traceparent` header (W3C format, so OpenTelemetry consumers can continue the trace) and as a plain `traceId` header.
+  - `KK_TO_RMQ_PERSISTENT_MESSAGES=true` - messages are sent as persistent, so RabbitMQ writes them to disk and they survive a broker restart. Persistence is set on each message by the publisher, not by the queue: a durable queue survives a restart, but a classic queue drops the transient messages in it. It only helps for durable queues; quorum queues and streams persist every message whether or not this is set
+  - with `KK_TO_RMQ_PUBLISH_MODE=confirmed` too, an event RabbitMQ has confirmed survives a broker restart or crash, as long as the queue it was routed to is durable

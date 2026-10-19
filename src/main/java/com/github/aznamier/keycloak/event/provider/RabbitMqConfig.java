@@ -51,6 +51,8 @@ public class RabbitMqConfig {
 
 
 	private String exchange;
+	// Written to disk by RabbitMQ
+	private Boolean persistentMessages;
 
 	// Connection settings
 	private Integer heartbeatSeconds;
@@ -147,6 +149,7 @@ public class RabbitMqConfig {
 		//
 
 		cfg.exchange = resolveConfigVar(config, "exchange", "amq.topic");
+		cfg.persistentMessages = flag(config, "persistent_messages", "false");
 
 		// Connection settings: defaults match the RabbitMQ client's own defaults
 		cfg.heartbeatSeconds = (int) number(config, "heartbeat_seconds", "60", 0, Integer.MAX_VALUE);
@@ -351,6 +354,13 @@ public class RabbitMqConfig {
 	}
 	public void setExchange(String exchange) {
 		this.exchange = exchange;
+	}
+
+	public Boolean getPersistentMessages() {
+		return persistentMessages;
+	}
+	public void setPersistentMessages(Boolean persistentMessages) {
+		this.persistentMessages = persistentMessages;
 	}
 
 	public Integer getHeartbeatSeconds() {
