@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -14,6 +15,12 @@ import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 import org.keycloak.Config.Scope;
+import org.keycloak.events.Details;
+import org.keycloak.events.Event;
+import org.keycloak.events.EventType;
+import org.keycloak.events.admin.AdminEvent;
+import org.keycloak.events.admin.OperationType;
+import org.keycloak.models.KeycloakSession;
 
 class RabbitMqConfigTest {
 
@@ -107,6 +114,30 @@ class RabbitMqConfigTest {
 		assertTrue(fromSettings("use_tls", " TRUE ").getUseTls());
 	}
 
+	@Test
+	void routingKeyForClientEvents() {
+		KeycloakSession session = mock(KeycloakSession.class, RETURNS_DEEP_STUBS);
+		when(session.realms().getRealm("realm-id").getName()).thenReturn("My.Realm");
+		Event event = event(EventType.LOGIN, null, null);
+
+		assertEquals("KK.EVENT.CLIENT.MyRealm.SUCCESS.my-client.LOGIN", RabbitMqConfig.calculateRoutingKey(event, session));
+	}
+
+	@Test
+	void routingKeyForAdminEvents() {
+		KeycloakSession session = mock(KeycloakSession.class, RETURNS_DEEP_STUBS);
+		when(session.getContext().getRealm().getName()).thenReturn("my realm");
+
+		assertEquals("KK.EVENT.ADMIN.my_realm.ERROR.USER.DELETE",
+				RabbitMqConfig.calculateRoutingKey(adminEvent("USER", OperationType.DELETE, "failed"), session));
+	}
+
+	@Test
+	void normalizeKeyRemovesSpecialCharactersAndReplacesSpaces() {
+		assertEquals("KK.EVENT.a_b.c-d", RabbitMqConfig.normalizeKey("KK.EVENT.a b.c-d!@$%"));
+		assertEquals("abc", RabbitMqConfig.removeDots("a.b.c"));
+	}
+
 	private static RabbitMqConfig fromSettings(String name, String value) {
 		Map<String, String> settings = new HashMap<>();
 		settings.put(name, value);
@@ -122,5 +153,27 @@ class RabbitMqConfigTest {
 		Scope scope = mock(Scope.class);
 		when(scope.get(anyString())).thenAnswer(i -> withVhost.get(i.<String>getArgument(0)));
 		return RabbitMqConfig.createFromScope(scope);
+	}
+
+	private static Event event(EventType type, String error, String registerMethod) {
+		Event event = new Event();
+		event.setType(type);
+		event.setError(error);
+		event.setRealmId("realm-id");
+		event.setClientId("my-client");
+		if (registerMethod != null) {
+			Map<String, String> details = new HashMap<>();
+			details.put(Details.REGISTER_METHOD, registerMethod);
+			event.setDetails(details);
+		}
+		return event;
+	}
+
+	private static AdminEvent adminEvent(String resourceType, OperationType operation, String error) {
+		AdminEvent event = new AdminEvent();
+		event.setResourceTypeAsString(resourceType);
+		event.setOperationType(operation);
+		event.setError(error);
+		return event;
 	}
 }
