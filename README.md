@@ -151,6 +151,7 @@ essential events (e.g. `UPDATE_EMAIL,ADMIN:USER.UPDATE`):
   - each ordered event waits for RabbitMQ to confirm everything before it, so this costs one confirm round trip per ordered event; list only events that change state, not frequent ones such as `LOGIN`
   - it needs `KK_TO_RMQ_PUBLISH_MODE=confirmed`; with another mode, Keycloak doesn't start
   - essential events are already sent one at a time, in order, so an event can't be both essential and ordered; listing it in both stops Keycloak from starting
+  - excluded events are never published, so an event can't be both excluded and ordered; listing it in both stops Keycloak from starting
   - each Keycloak instance publishes on its own, so with several instances, the order is only kept among the events of one instance
 
 ###### Messages
