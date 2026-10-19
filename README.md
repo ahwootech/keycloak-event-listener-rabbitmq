@@ -165,5 +165,6 @@ An essential event is sent before Keycloak commits the request that produced it,
 (e.g. `REFRESH_TOKEN,CODE_TO_TOKEN`). Very frequent token events can make up most of Keycloak's events, so excluding the
 ones no consumer needs reduces the load on Keycloak, RabbitMQ and consumers:
   - excluded events are skipped before anything else is done with them
+  - excluding them also slows how fast the publish buffer fills while RabbitMQ is unreachable
   - error events have their own type, so excluding `REFRESH_TOKEN` still publishes `REFRESH_TOKEN_ERROR`
   - an event can't be both essential and excluded: listing it in both stops Keycloak from starting with an error naming it
