@@ -215,6 +215,13 @@ public class RabbitMqConfig {
 					+ String.join(", ", essentialAndOrdered) + ", which KK_TO_RMQ_ESSENTIAL_EVENTS also lists; essential events "
 					+ "are already sent one at a time, in order, so an event can't be both");
 		}
+		Set<String> excludedAndOrdered = new LinkedHashSet<>(cfg.orderedEvents);
+		excludedAndOrdered.retainAll(cfg.excludedEvents);
+		if (!excludedAndOrdered.isEmpty()) {
+			throw new IllegalArgumentException("keycloak-to-rabbitmq setting ordered_events (KK_TO_RMQ_ORDERED_EVENTS) lists "
+					+ String.join(", ", excludedAndOrdered) + ", which KK_TO_RMQ_EXCLUDED_EVENTS also lists; excluded events "
+					+ "are never published, so an event can't be both");
+		}
 		for (String name : unknownEnvironmentVariables(System.getenv())) {
 			log.warnf("keycloak-to-rabbitmq %s is set, but it is not a setting of this plugin version, so it is ignored", name);
 		}

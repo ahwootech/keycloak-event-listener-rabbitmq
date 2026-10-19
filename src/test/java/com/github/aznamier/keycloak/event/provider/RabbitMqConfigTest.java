@@ -314,6 +314,17 @@ class RabbitMqConfigTest {
 	}
 
 	@Test
+	void anEventCannotBeBothExcludedAndOrdered() {
+		Map<String, String> settings = new HashMap<>();
+		settings.put("publish_mode", "confirmed");
+		settings.put("excluded_events", "REFRESH_TOKEN,ADMIN:USER.UPDATE");
+		settings.put("ordered_events", "UPDATE_EMAIL,admin:user.update");
+
+		assertEquals("keycloak-to-rabbitmq setting ordered_events (KK_TO_RMQ_ORDERED_EVENTS) lists ADMIN:USER.UPDATE, which KK_TO_RMQ_EXCLUDED_EVENTS also lists; excluded events are never published, so an event can't be both",
+				assertThrows(IllegalArgumentException.class, () -> fromSettings(settings)).getMessage());
+	}
+
+	@Test
 	void unknownOrderedEventNamesStopStartup() {
 		Map<String, String> settings = new HashMap<>();
 		settings.put("publish_mode", "confirmed");
