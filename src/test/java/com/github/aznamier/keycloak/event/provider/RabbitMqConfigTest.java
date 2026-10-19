@@ -50,6 +50,7 @@ class RabbitMqConfigTest {
 		assertFalse(cfg.getPersistentMessages());
 		assertTrue(cfg.getEssentialEvents().isEmpty());
 		assertEquals(5000L, cfg.getEssentialEventsTimeoutMs());
+		assertTrue(cfg.getExcludedEvents().isEmpty());
 	}
 
 	@Test
@@ -232,6 +233,34 @@ class RabbitMqConfigTest {
 	@Test
 	void anUnknownAdminResourceTypeIsAllowedAsItMayComeFromAnExtension() {
 		assertEquals(Set.of("ADMIN:MY_EXTENSION_THING.DELETE"), fromSettings("essential_events", "ADMIN:MY_EXTENSION_THING.DELETE").getEssentialEvents());
+	}
+
+	@Test
+	void listedUserAndAdminEventsAreExcluded() {
+		RabbitMqConfig cfg = fromSettings("excluded_events", " refresh_token , CODE_TO_TOKEN,ADMIN:USER.UPDATE ");
+
+		assertTrue(cfg.isExcluded(event(EventType.REFRESH_TOKEN, null, null)));
+		assertTrue(cfg.isExcluded(event(EventType.CODE_TO_TOKEN, null, null)));
+		assertTrue(cfg.isExcluded(adminEvent("USER", OperationType.UPDATE, null)));
+		assertFalse(cfg.isExcluded(event(EventType.LOGIN, null, null)), "not listed");
+		assertFalse(cfg.isExcluded(event(EventType.REFRESH_TOKEN_ERROR, "invalid_token", null)), "errors have their own type");
+		assertFalse(cfg.isExcluded(adminEvent("USER", OperationType.CREATE, null)));
+	}
+
+	@Test
+	void anEventCannotBeBothEssentialAndExcluded() {
+		Map<String, String> settings = new HashMap<>();
+		settings.put("essential_events", "REGISTER,ADMIN:USER.DELETE");
+		settings.put("excluded_events", "admin:user.delete,REFRESH_TOKEN,register");
+
+		assertEquals("keycloak-to-rabbitmq setting excluded_events (KK_TO_RMQ_EXCLUDED_EVENTS) lists ADMIN:USER.DELETE, REGISTER, which KK_TO_RMQ_ESSENTIAL_EVENTS also lists; an event can't be both",
+				assertThrows(IllegalArgumentException.class, () -> fromSettings(settings)).getMessage());
+	}
+
+	@Test
+	void unknownExcludedEventNamesStopStartup() {
+		assertEquals("keycloak-to-rabbitmq setting excluded_events (KK_TO_RMQ_EXCLUDED_EVENTS) lists REFRESH_TOKENS, which is not a Keycloak event type",
+				assertThrows(IllegalArgumentException.class, () -> fromSettings("excluded_events", "REFRESH_TOKENS")).getMessage());
 	}
 
 	@Test
