@@ -492,13 +492,35 @@ class RabbitMqResilienceIT {
 		command[0] = "rabbitmqctl";
 		command[1] = "-q";
 		System.arraycopy(args, 0, command, 2, args.length);
-		org.testcontainers.containers.Container.ExecResult result = rabbitmq.execInContainer(command);
-		assertEquals(0, result.getExitCode(), result.getStderr());
+		rabbitmqCli(command);
+	}
+
+	/**
+	 * Runs a RabbitMQ command-line tool in the container. Under a memory alarm, rabbitmqctl sometimes never returns,
+	 * which would hang the build, so each attempt is killed after 20s and retried, up to 3 times. Every command used
+	 * here only reads, or sets a value that is the same when set again, so retrying is safe.
+	 */
+	private static org.testcontainers.containers.Container.ExecResult rabbitmqCli(String... command) throws Exception {
+		String[] limited = new String[command.length + 4];
+		limited[0] = "timeout";
+		limited[1] = "-s";
+		limited[2] = "KILL";
+		limited[3] = "20";
+		System.arraycopy(command, 0, limited, 4, command.length);
+		org.testcontainers.containers.Container.ExecResult result = null;
+		for (int attempt = 1; attempt <= 3; attempt++) {
+			result = rabbitmq.execInContainer(limited);
+			if (result.getExitCode() == 0) {
+				return result;
+			}
+		}
+		throw new AssertionError(String.join(" ", command) + " failed 3 times, last with exit code " + result.getExitCode()
+				+ " (137 means it was killed after 20s): " + result.getStderr());
 	}
 
 	private static String alarmsRaised() {
 		try {
-			return rabbitmq.execInContainer("rabbitmq-diagnostics", "-q", "alarms").getStdout();
+			return rabbitmqCli("rabbitmq-diagnostics", "-q", "alarms").getStdout();
 		} catch (Exception e) {
 			throw new IllegalStateException(e);
 		}
@@ -506,7 +528,7 @@ class RabbitMqResilienceIT {
 
 	/** RabbitMQ's relative memory high watermark, e.g. "0.6", so a test can put it back. */
 	private static String memoryWatermark() throws Exception {
-		String status = rabbitmq.execInContainer("rabbitmq-diagnostics", "-q", "status").getStdout();
+		String status = rabbitmqCli("rabbitmq-diagnostics", "-q", "status").getStdout();
 		Matcher m = Pattern.compile("Memory high watermark setting: ([0-9.]+) of available memory").matcher(status);
 		assertTrue(m.find(), status);
 		return m.group(1);
