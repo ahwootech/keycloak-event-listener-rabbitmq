@@ -21,6 +21,7 @@ import java.util.logging.Logger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.keycloak.Config.Scope;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -30,7 +31,8 @@ import org.testcontainers.utility.MountableFile;
 /**
  * Connects the real plugin factory to a RabbitMQ with TLS, using a test CA and a server certificate for localhost.
  */
-@Testcontainers(disabledWithoutDocker = true)
+@Testcontainers
+@EnabledIf(DockerRequirement.CONDITION)
 class RabbitMqTlsIT {
 
 	@Container

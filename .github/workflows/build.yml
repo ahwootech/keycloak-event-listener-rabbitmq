@@ -26,10 +26,12 @@ jobs:
           distribution: 'temurin'
           java-version: 17
           cache: maven
+      # it.requireDocker: the integration tests fail rather than skip without Docker, so CI can't pass without them
       - name: Build
         run: >
           ./mvnw $MAVEN_CLI_OPTS
           -Dkeycloak.version=${{ matrix.keycloak }}
+          -Dit.requireDocker=true
           dependency:go-offline
           clean verify
       # Full test output, including the plugin's logs from the integration tests

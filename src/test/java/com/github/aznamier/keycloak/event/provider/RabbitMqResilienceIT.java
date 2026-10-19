@@ -18,6 +18,7 @@ import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.keycloak.Config.Scope;
 import org.keycloak.events.Event;
 import org.keycloak.events.EventListenerProvider;
@@ -46,7 +47,8 @@ import eu.rekawek.toxiproxy.model.ToxicDirection;
  * Runs the real plugin factory against a real RabbitMQ in Docker. The plugin connects through Toxiproxy,
  * so tests can cut the link the way a failed host does: packets go nowhere and nothing is closed.
  */
-@Testcontainers(disabledWithoutDocker = true)
+@Testcontainers
+@EnabledIf(DockerRequirement.CONDITION)
 class RabbitMqResilienceIT {
 
 	private static final Network network = Network.newNetwork();
